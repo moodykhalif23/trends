@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -24,8 +26,6 @@ func remoteVideo(ctx context.Context, link string) fyne.CanvasObject {
 	img := &canvas.Image{FillMode: canvas.ImageFillContain}
 	img.SetMinSize(fyne.NewSize(videoW, videoH))
 
-	// play is declared before it's assigned so the closure can refer to it —
-	// same trick as `var walk func(...)` in reader.go.
 	var play *widget.Button
 	play = widget.NewButtonWithIcon("Play video", theme.MediaPlayIcon(), func() {
 		play.Disable()
@@ -40,10 +40,22 @@ func remoteVideo(ctx context.Context, link string) fyne.CanvasObject {
 }
 
 func playVideo(ctx context.Context, link string, img *canvas.Image) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-loglevel", "error", "-re",
-		"-user_agent", userAgent, "-i", link, "-an",
+	if strings.Contains(link, "youtube.com/embed/") {
+		out, err := exec.CommandContext(ctx, "yt-dlp", "-g", "-f", "b[height<=480]/b", link).Output()
+		if err != nil {
+			return fmt.Errorf("yt-dlp: %w", err)
+		}
+		link = strings.TrimSpace(string(out))
+	}
+
+	args := []string{"-loglevel", "error", "-re", "-user_agent", userAgent, "-i", link,
+		"-map", "0:v:0",
 		"-vf", fmt.Sprintf("scale=%[1]d:%[2]d:force_original_aspect_ratio=decrease,pad=%[1]d:%[2]d:(ow-iw)/2:(oh-ih)/2", videoW, videoH),
-		"-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1")
+		"-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"}
+	if hasAudio(ctx, link) {
+		args = append(args, "-map", "0:a:0", "-f", "pulse", "default")
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stderr = os.Stderr
 
 	// StdoutPipe gives an io.ReadCloser — the same interface as an HTTP body.
@@ -55,7 +67,6 @@ func playVideo(ctx context.Context, link string, img *canvas.Image) error {
 		return err
 	}
 
-	// Double buffering: ffmpeg writes into `back` while `front` is on screen,then they swap.
 	front := image.NewRGBA(image.Rect(0, 0, videoW, videoH))
 	back := image.NewRGBA(image.Rect(0, 0, videoW, videoH))
 	for {
@@ -70,4 +81,10 @@ func playVideo(ctx context.Context, link string, img *canvas.Image) error {
 		front, back = back, front
 	}
 	return cmd.Wait()
+}
+
+func hasAudio(ctx context.Context, link string) bool {
+	out, _ := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-user_agent", userAgent,
+		"-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", link).Output()
+	return len(bytes.TrimSpace(out)) > 0
 }

@@ -84,6 +84,12 @@ func Read(ctx context.Context, it Item) (Article, error) {
 					blocks = append(blocks, node{n, Block{Video: src}})
 				}
 				return
+			// YOUTUBE: news sites embed video as a YouTube player iframe.
+			case "iframe":
+				if src := attr(n, "src"); strings.Contains(src, "youtube.com/embed/") {
+					blocks = append(blocks, node{n, Block{Video: resolve(base, src)}})
+				}
+				return
 			case "h2", "h3":
 				if t := text(n); t != "" {
 					blocks = append(blocks, node{n, Block{Text: t, Heading: true}})
