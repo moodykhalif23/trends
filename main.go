@@ -10,6 +10,7 @@ import (
 	_ "image/png"
 	"log"
 	"net/url"
+	"runtime"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -108,7 +109,7 @@ func main() {
 }
 
 func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 	content := container.NewVBox(richText(heading(it.Title), para("Loading…")))
 
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
@@ -131,19 +132,26 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 		})
 	}()
 
-	top := container.NewHBox(widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), back))
+	top := container.NewHBox(widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
+		cancel()
+		log.Println("goroutines:", runtime.NumGoroutine())
+		back()
+	}))
 	return container.NewBorder(top, container.NewPadded(actions), nil, nil, container.NewVScroll(container.NewPadded(content)))
 }
 
 func articleView(ctx context.Context, art Article, refresh func()) []fyne.CanvasObject {
-	objs := []fyne.CanvasObject{richText(heading(art.Title), emphasis("Published by "+art.Site))}
+	objs := []fyne.CanvasObject{richText(heading(art.Title)), richText(emphasis("Published by " + art.Site))}
 	if art.Lead != "" {
 		objs = append(objs, remoteImage(ctx, art.Lead, refresh))
 	}
 	for _, b := range art.Blocks {
-		if b.Image != "" {
+		switch {
+		case b.Image != "":
 			objs = append(objs, remoteImage(ctx, b.Image, refresh))
-		} else {
+		case b.Heading:
+			objs = append(objs, richText(heading(b.Text)))
+		default:
 			objs = append(objs, richText(para(b.Text)))
 		}
 	}
@@ -172,6 +180,9 @@ func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image
 		b := m.Bounds()
 		log.Printf("image %v  %dx%d  %s", time.Since(start), b.Dx(), b.Dy(), link)
 		if b.Dx() < 200 {
+			return
+		}
+		if ctx.Err() != nil {
 			return
 		}
 		fyne.Do(func() {

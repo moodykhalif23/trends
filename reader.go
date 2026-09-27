@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -12,8 +13,9 @@ import (
 const previewParagraphs = 6
 
 type Block struct {
-	Text  string
-	Image string
+	Text    string
+	Image   string
+	Heading bool
 }
 
 type Article struct {
@@ -76,6 +78,12 @@ func Read(ctx context.Context, it Item) (Article, error) {
 					blocks = append(blocks, node{n, Block{Image: src}})
 				}
 				return
+
+			case "h2", "h3":
+				if t := text(n); t != "" {
+					blocks = append(blocks, node{n, Block{Text: t, Heading: true}})
+				}
+				return
 			case "p":
 				if t := text(n); len(t) >= 40 {
 					blocks = append(blocks, node{n, Block{Text: t}})
@@ -113,6 +121,13 @@ func Read(ctx context.Context, it Item) (Article, error) {
 			}
 			continue
 		}
+
+		if b.Heading {
+			if paras > 0 && paras < previewParagraphs {
+				a.Blocks = append(a.Blocks, b.Block)
+			}
+			continue
+		}
 		if paras == previewParagraphs {
 			a.Truncated = true
 			break
@@ -141,12 +156,39 @@ func publisher(it Item, siteName string) string {
 }
 
 func imageSource(n *html.Node, base *url.URL) string {
+	for _, key := range []string{"data-srcset", "srcset"} {
+		if v := pickSrcset(attr(n, key), 800); v != "" {
+			return resolve(base, v)
+		}
+	}
 	for _, key := range []string{"data-src", "src"} {
 		if v := attr(n, key); v != "" && !strings.HasPrefix(v, "data:") {
 			return resolve(base, v)
 		}
 	}
 	return ""
+}
+
+func pickSrcset(srcset string, want int) string {
+	best, bestW := "", 0
+	for _, cand := range strings.Split(srcset, ", ") {
+		f := strings.Fields(cand)
+		if len(f) != 2 || !strings.HasSuffix(f[1], "w") {
+			continue
+		}
+
+		w, _ := strconv.Atoi(strings.TrimSuffix(f[1], "w"))
+		big, bestBig := w >= want, bestW >= want
+		switch {
+		case w == 0:
+		case best == "",
+			big && !bestBig,       // first one that's big enough
+			big && w < bestW,      // a smaller one that's still big enough
+			!bestBig && w > bestW: // nothing big enough yet: take the widest
+			best, bestW = f[0], w
+		}
+	}
+	return best
 }
 
 func resolve(base *url.URL, ref string) string {
