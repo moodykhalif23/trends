@@ -7,7 +7,9 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"log"
 	"net/url"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -121,7 +123,7 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 			if err != nil {
 				content.Objects = []fyne.CanvasObject{richText(heading(it.Title), para("Preview unavailable: "+err.Error()))}
 			} else {
-				content.Objects = articleView(art)
+				content.Objects = articleView(art, content.Refresh)
 			}
 			content.Refresh()
 		})
@@ -131,14 +133,14 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	return container.NewBorder(top, container.NewPadded(actions), nil, nil, container.NewVScroll(container.NewPadded(content)))
 }
 
-func articleView(art Article) []fyne.CanvasObject {
+func articleView(art Article, refresh func()) []fyne.CanvasObject {
 	objs := []fyne.CanvasObject{richText(heading(art.Title), emphasis("Published by "+art.Site))}
 	if art.Lead != "" {
-		objs = append(objs, remoteImage(art.Lead))
+		objs = append(objs, remoteImage(art.Lead, refresh))
 	}
 	for _, b := range art.Blocks {
 		if b.Image != "" {
-			objs = append(objs, remoteImage(b.Image))
+			objs = append(objs, remoteImage(b.Image, refresh))
 		} else {
 			objs = append(objs, richText(para(b.Text)))
 		}
@@ -149,26 +151,35 @@ func articleView(art Article) []fyne.CanvasObject {
 	return objs
 }
 
-func remoteImage(link string) *canvas.Image {
+func remoteImage(link string, refresh func()) *canvas.Image {
 	img := &canvas.Image{FillMode: canvas.ImageFillContain}
 	img.Hide()
 	go func() {
+		start := time.Now()
 		body, err := get(link)
 		if err != nil {
+			log.Printf("image FAIL %v  %s  err=%v", time.Since(start), link, err)
 			return
 		}
 		defer body.Close()
 		m, _, err := image.Decode(body)
-		if err != nil || m.Bounds().Dx() < 200 {
+		if err != nil {
+			log.Printf("image DECODE FAIL %v  %s  err=%v", time.Since(start), link, err)
+			return
+		}
+		b := m.Bounds()
+		log.Printf("image %v  %dx%d  %s", time.Since(start), b.Dx(), b.Dy(), link)
+		if b.Dx() < 200 {
 			return
 		}
 		fyne.Do(func() {
-			b := m.Bounds()
 			img.Image = m
 			img.SetMinSize(fyne.NewSize(0, min(400, 600*float32(b.Dy())/float32(b.Dx()))))
 			img.Show()
+			refresh()
 		})
 	}()
+
 	return img
 }
 
