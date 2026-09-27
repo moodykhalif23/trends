@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -168,7 +169,7 @@ func hackerNews(q string) ([]Item, error) {
 }
 
 func rss(f Feed) ([]Item, error) {
-	body, err := get(f.URL)
+	body, err := get(context.Background(), f.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -190,9 +191,8 @@ func rss(f Feed) ([]Item, error) {
 	}
 	return items, nil
 }
-
-func get(u string) (io.ReadCloser, error) {
-	req, err := http.NewRequest(http.MethodGet, u, nil)
+func get(ctx context.Context, u string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func get(u string) (io.ReadCloser, error) {
 }
 
 func getJSON(u string, v any) error {
-	body, err := get(u)
+	body, err := get(context.Background(), u)
 	if err != nil {
 		return err
 	}

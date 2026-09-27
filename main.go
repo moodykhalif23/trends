@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -107,6 +108,7 @@ func main() {
 }
 
 func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
+	ctx := context.Background()
 	content := container.NewVBox(richText(heading(it.Title), para("Loading…")))
 
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
@@ -117,13 +119,13 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	}
 
 	go func() {
-		art, err := Read(it)
+		art, err := Read(ctx, it)
 		fyne.Do(func() {
 			visit.SetText("Continue reading at " + art.Site)
 			if err != nil {
 				content.Objects = []fyne.CanvasObject{richText(heading(it.Title), para("Preview unavailable: "+err.Error()))}
 			} else {
-				content.Objects = articleView(art, content.Refresh)
+				content.Objects = articleView(ctx, art, content.Refresh)
 			}
 			content.Refresh()
 		})
@@ -133,14 +135,14 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	return container.NewBorder(top, container.NewPadded(actions), nil, nil, container.NewVScroll(container.NewPadded(content)))
 }
 
-func articleView(art Article, refresh func()) []fyne.CanvasObject {
+func articleView(ctx context.Context, art Article, refresh func()) []fyne.CanvasObject {
 	objs := []fyne.CanvasObject{richText(heading(art.Title), emphasis("Published by "+art.Site))}
 	if art.Lead != "" {
-		objs = append(objs, remoteImage(art.Lead, refresh))
+		objs = append(objs, remoteImage(ctx, art.Lead, refresh))
 	}
 	for _, b := range art.Blocks {
 		if b.Image != "" {
-			objs = append(objs, remoteImage(b.Image, refresh))
+			objs = append(objs, remoteImage(ctx, b.Image, refresh))
 		} else {
 			objs = append(objs, richText(para(b.Text)))
 		}
@@ -151,12 +153,12 @@ func articleView(art Article, refresh func()) []fyne.CanvasObject {
 	return objs
 }
 
-func remoteImage(link string, refresh func()) *canvas.Image {
+func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image {
 	img := &canvas.Image{FillMode: canvas.ImageFillContain}
 	img.Hide()
 	go func() {
 		start := time.Now()
-		body, err := get(link)
+		body, err := get(ctx, link)
 		if err != nil {
 			log.Printf("image FAIL %v  %s  err=%v", time.Since(start), link, err)
 			return

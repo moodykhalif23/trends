@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"strings"
@@ -33,7 +34,7 @@ type node struct {
 	Block
 }
 
-func Read(it Item) (Article, error) {
+func Read(ctx context.Context, it Item) (Article, error) {
 	a := Article{Title: it.Title, Site: publisher(it, "")}
 
 	base, err := url.Parse(it.Link)
@@ -41,7 +42,7 @@ func Read(it Item) (Article, error) {
 		return a, err
 	}
 
-	body, err := get(it.Link)
+	body, err := get(ctx, it.Link)
 	if err != nil {
 		return a, err
 	}
