@@ -115,7 +115,7 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
 	visit.Importance = widget.HighImportance
 	var art Article
-	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), func(c context.Context) error {
+	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Stop", theme.MediaStopIcon(), func(c context.Context) error {
 		return speak(c, art.Text())
 	})
 	listen.Disable()
@@ -210,8 +210,8 @@ func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image
 	return img
 }
 
-// toggleButton runs `run` in the background on click and reads "Stop" until it returns.
-func toggleButton(ctx context.Context, label string, icon fyne.Resource, run func(context.Context) error) *widget.Button {
+// toggleButton runs `run` in the background on click and shows the busy label until it returns.
+func toggleButton(ctx context.Context, label string, icon fyne.Resource, busy string, busyIcon fyne.Resource, run func(context.Context) error) *widget.Button {
 	var btn *widget.Button
 	var stop context.CancelFunc
 	btn = widget.NewButtonWithIcon(label, icon, func() {
@@ -221,8 +221,8 @@ func toggleButton(ctx context.Context, label string, icon fyne.Resource, run fun
 		}
 		cctx, cancel := context.WithCancel(ctx)
 		stop = cancel
-		btn.SetText("Stop")
-		btn.SetIcon(theme.MediaStopIcon())
+		btn.SetText(busy)
+		btn.SetIcon(busyIcon)
 		go func() {
 			if err := run(cctx); err != nil && cctx.Err() == nil {
 				log.Printf("%s FAIL err=%v", label, err)

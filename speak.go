@@ -13,7 +13,7 @@ var voice = filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-lessac-me
 
 // piper: text in, raw 16-bit PCM out. aplay: PCM in, speaker out.
 func speak(ctx context.Context, text string) error {
-	piper := exec.CommandContext(ctx, "piper", "-m", voice, "--output-raw")
+	piper := exec.CommandContext(ctx, "piper", "-m", voice, "--output-raw", "--sentence-silence", "0.4")
 	piper.Stdin = strings.NewReader(text)
 	piper.Stderr = os.Stderr
 
