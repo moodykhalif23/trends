@@ -133,7 +133,13 @@ func Read(ctx context.Context, it Item) (Article, error) {
 			continue
 		}
 
-		if b.Heading || b.Video != "" {
+		if b.Video != "" {
+			if paras > 0 {
+				a.Blocks = append(a.Blocks, b.Block)
+			}
+			continue
+		}
+		if b.Heading {
 			if paras > 0 && paras < previewParagraphs {
 				a.Blocks = append(a.Blocks, b.Block)
 			}

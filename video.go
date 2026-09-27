@@ -40,19 +40,29 @@ func remoteVideo(ctx context.Context, link string) fyne.CanvasObject {
 }
 
 func playVideo(ctx context.Context, link string, img *canvas.Image) error {
+	inputs := []string{link}
 	if strings.Contains(link, "youtube.com/embed/") {
-		out, err := exec.CommandContext(ctx, "yt-dlp", "-g", "-f", "b[height<=480]/b", link).Output()
+		out, err := exec.CommandContext(ctx, "yt-dlp", "-g", "-f", "bv*[height<=480]+ba/b", link).Output()
 		if err != nil {
 			return fmt.Errorf("yt-dlp: %w", err)
 		}
-		link = strings.TrimSpace(string(out))
+		inputs = strings.Fields(string(out))
+		if len(inputs) == 0 {
+			return fmt.Errorf("yt-dlp: no URL for %s", link) // else inputs[0] below panics
+		}
 	}
 
-	args := []string{"-loglevel", "error", "-re", "-user_agent", userAgent, "-i", link,
-		"-map", "0:v:0",
+	args := []string{"-loglevel", "error"}
+	for _, in := range inputs {
+		args = append(args, "-re", "-user_agent", userAgent, "-i", in)
+	}
+	args = append(args, "-map", "0:v:0",
 		"-vf", fmt.Sprintf("scale=%[1]d:%[2]d:force_original_aspect_ratio=decrease,pad=%[1]d:%[2]d:(ow-iw)/2:(oh-ih)/2", videoW, videoH),
-		"-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"}
-	if hasAudio(ctx, link) {
+		"-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1")
+	switch {
+	case len(inputs) == 2:
+		args = append(args, "-map", "1:a:0", "-f", "pulse", "default")
+	case hasAudio(ctx, inputs[0]):
 		args = append(args, "-map", "0:a:0", "-f", "pulse", "default")
 	}
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
