@@ -15,6 +15,7 @@ const previewParagraphs = 6
 type Block struct {
 	Text    string
 	Image   string
+	Video   string
 	Heading bool
 }
 
@@ -78,7 +79,11 @@ func Read(ctx context.Context, it Item) (Article, error) {
 					blocks = append(blocks, node{n, Block{Image: src}})
 				}
 				return
-
+			case "video":
+				if src := videoSource(n, base); src != "" {
+					blocks = append(blocks, node{n, Block{Video: src}})
+				}
+				return
 			case "h2", "h3":
 				if t := text(n); t != "" {
 					blocks = append(blocks, node{n, Block{Text: t, Heading: true}})
@@ -122,7 +127,7 @@ func Read(ctx context.Context, it Item) (Article, error) {
 			continue
 		}
 
-		if b.Heading {
+		if b.Heading || b.Video != "" {
 			if paras > 0 && paras < previewParagraphs {
 				a.Blocks = append(a.Blocks, b.Block)
 			}
@@ -189,6 +194,19 @@ func pickSrcset(srcset string, want int) string {
 		}
 	}
 	return best
+}
+
+// <video src="..."> or <video><source src="..."></video>
+func videoSource(n *html.Node, base *url.URL) string {
+	if v := attr(n, "src"); v != "" {
+		return resolve(base, v)
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Data == "source" && attr(c, "src") != "" {
+			return resolve(base, attr(c, "src"))
+		}
+	}
+	return ""
 }
 
 func resolve(base *url.URL, ref string) string {

@@ -149,6 +149,8 @@ func articleView(ctx context.Context, art Article, refresh func()) []fyne.Canvas
 		switch {
 		case b.Image != "":
 			objs = append(objs, remoteImage(ctx, b.Image, refresh))
+		case b.Video != "":
+			objs = append(objs, remoteVideo(ctx, b.Video))
 		case b.Heading:
 			objs = append(objs, richText(heading(b.Text)))
 		default:
