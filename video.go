@@ -16,7 +16,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 )
 
 // Every frame is scaled and padded to this size, so every frame is exactly
@@ -35,28 +34,8 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 		}()
 	}
 
-	var play *widget.Button
-	var stop context.CancelFunc
-	play = widget.NewButtonWithIcon("Play video", theme.MediaPlayIcon(), func() {
-		if stop != nil {
-			stop() // kills ffmpeg (sound too); playVideo returns and the goroutine resets the button
-			return
-		}
-		pctx, cancel := context.WithCancel(ctx)
-		stop = cancel
-		play.SetText("Stop")
-		play.SetIcon(theme.MediaStopIcon())
-		go func() {
-			if err := playVideo(pctx, link, img); err != nil && pctx.Err() == nil {
-				log.Printf("video FAIL %s  err=%v", link, err)
-			}
-			cancel() // also on a normal finish, or the context leaks (go vet checks this)
-			fyne.Do(func() {
-				stop = nil
-				play.SetText("Play video")
-				play.SetIcon(theme.MediaPlayIcon())
-			})
-		}()
+	play := toggleButton(ctx, "Play video", theme.MediaPlayIcon(), func(c context.Context) error {
+		return playVideo(c, link, img)
 	})
 	return container.NewBorder(nil, play, nil, nil, img)
 }

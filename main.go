@@ -114,18 +114,25 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
 	visit.Importance = widget.HighImportance
-	actions := container.NewHBox(visit)
+	var art Article
+	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), func(c context.Context) error {
+		return speak(c, art.Text())
+	})
+	listen.Disable()
+	actions := container.NewHBox(visit, listen)
 	if it.Discuss != "" {
 		actions.Add(widget.NewButton("Discuss on Hacker News", func() { open(a, it.Discuss) }))
 	}
 
 	go func() {
-		art, err := Read(ctx, it)
+		res, err := Read(ctx, it)
 		fyne.Do(func() {
-			visit.SetText("Continue reading at " + art.Site)
+			visit.SetText("Continue reading at " + res.Site)
 			if err != nil {
 				content.Objects = []fyne.CanvasObject{richText(heading(it.Title), para("Preview unavailable: "+err.Error()))}
 			} else {
+				art = res
+				listen.Enable()
 				content.Objects = articleView(ctx, art, content.Refresh)
 			}
 			content.Refresh()
@@ -201,6 +208,34 @@ func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image
 	}()
 
 	return img
+}
+
+// toggleButton runs `run` in the background on click and reads "Stop" until it returns.
+func toggleButton(ctx context.Context, label string, icon fyne.Resource, run func(context.Context) error) *widget.Button {
+	var btn *widget.Button
+	var stop context.CancelFunc
+	btn = widget.NewButtonWithIcon(label, icon, func() {
+		if stop != nil {
+			stop()
+			return
+		}
+		cctx, cancel := context.WithCancel(ctx)
+		stop = cancel
+		btn.SetText("Stop")
+		btn.SetIcon(theme.MediaStopIcon())
+		go func() {
+			if err := run(cctx); err != nil && cctx.Err() == nil {
+				log.Printf("%s FAIL err=%v", label, err)
+			}
+			cancel()
+			fyne.Do(func() {
+				stop = nil
+				btn.SetText(label)
+				btn.SetIcon(icon)
+			})
+		}()
+	})
+	return btn
 }
 
 func richText(segs ...widget.RichTextSegment) *widget.RichText {
