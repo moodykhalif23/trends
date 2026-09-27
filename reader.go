@@ -16,6 +16,7 @@ type Block struct {
 	Text    string
 	Image   string
 	Video   string
+	Poster  string // thumbnail shown before the video plays
 	Heading bool
 }
 
@@ -81,13 +82,19 @@ func Read(ctx context.Context, it Item) (Article, error) {
 				return
 			case "video":
 				if src := videoSource(n, base); src != "" {
-					blocks = append(blocks, node{n, Block{Video: src}})
+					b := Block{Video: src}
+					// POSTER: guard the empty case — resolve(base, "") would
+					// return the page URL itself, not "".
+					if p := attr(n, "poster"); p != "" {
+						b.Poster = resolve(base, p)
+					}
+					blocks = append(blocks, node{n, b})
 				}
 				return
 			// YOUTUBE: news sites embed video as a YouTube player iframe.
 			case "iframe":
 				if src := attr(n, "src"); strings.Contains(src, "youtube.com/embed/") {
-					blocks = append(blocks, node{n, Block{Video: resolve(base, src)}})
+					blocks = append(blocks, node{n, Block{Video: resolve(base, src), Poster: youtubePoster(src)}})
 				}
 				return
 			case "h2", "h3":
@@ -219,6 +226,18 @@ func videoSource(n *html.Node, base *url.URL) string {
 		}
 	}
 	return ""
+}
+
+// POSTER: YouTube serves a thumbnail for every video at a fixed URL, so no
+// yt-dlp call is needed. strings.Cut splits once on the separator and returns
+// (before, after, found) — cleaner than Split when you only want one piece.
+//
+//	https://www.youtube.com/embed/-Nvne3LzBls?feature=oembed
+//	                              ^^^^^^^^^^^ the id
+func youtubePoster(src string) string {
+	_, rest, _ := strings.Cut(src, "/embed/")
+	id, _, _ := strings.Cut(rest, "?")
+	return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg"
 }
 
 func resolve(base *url.URL, ref string) string {

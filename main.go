@@ -150,7 +150,7 @@ func articleView(ctx context.Context, art Article, refresh func()) []fyne.Canvas
 		case b.Image != "":
 			objs = append(objs, remoteImage(ctx, b.Image, refresh))
 		case b.Video != "":
-			objs = append(objs, remoteVideo(ctx, b.Video))
+			objs = append(objs, remoteVideo(ctx, b.Video, b.Poster))
 		case b.Heading:
 			objs = append(objs, richText(heading(b.Text)))
 		default:
@@ -163,28 +163,33 @@ func articleView(ctx context.Context, art Article, refresh func()) []fyne.Canvas
 	return objs
 }
 
+func fetchImage(ctx context.Context, link string) (image.Image, error) {
+	start := time.Now()
+	body, err := get(ctx, link)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	m, _, err := image.Decode(body)
+	if err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	b := m.Bounds()
+	log.Printf("image %v  %dx%d  %s", time.Since(start), b.Dx(), b.Dy(), link)
+	return m, nil
+}
+
 func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image {
 	img := &canvas.Image{FillMode: canvas.ImageFillContain}
 	img.Hide()
 	go func() {
-		start := time.Now()
-		body, err := get(ctx, link)
+		m, err := fetchImage(ctx, link)
 		if err != nil {
-			log.Printf("image FAIL %v  %s  err=%v", time.Since(start), link, err)
-			return
-		}
-		defer body.Close()
-		m, _, err := image.Decode(body)
-		if err != nil {
-			log.Printf("image DECODE FAIL %v  %s  err=%v", time.Since(start), link, err)
+			log.Printf("image FAIL %s  err=%v", link, err)
 			return
 		}
 		b := m.Bounds()
-		log.Printf("image %v  %dx%d  %s", time.Since(start), b.Dx(), b.Dy(), link)
-		if b.Dx() < 200 {
-			return
-		}
-		if ctx.Err() != nil {
+		if b.Dx() < 200 || ctx.Err() != nil {
 			return
 		}
 		fyne.Do(func() {

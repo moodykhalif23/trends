@@ -22,18 +22,46 @@ import (
 // videoW*videoH*4 bytes (R,G,B,A = 1 byte each).
 const videoW, videoH = 640, 360
 
-func remoteVideo(ctx context.Context, link string) fyne.CanvasObject {
+func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 	img := &canvas.Image{FillMode: canvas.ImageFillContain}
 	img.SetMinSize(fyne.NewSize(videoW, videoH))
 
-	var play *widget.Button
-	play = widget.NewButtonWithIcon("Play video", theme.MediaPlayIcon(), func() {
-		play.Disable()
+	// POSTER: load the thumbnail into the same canvas.Image the frames will
+	// later overwrite. No layout refresh needed — the min size is already set.
+	if poster != "" {
 		go func() {
-			if err := playVideo(ctx, link, img); err != nil && ctx.Err() == nil {
+			if m, err := fetchImage(ctx, poster); err == nil && ctx.Err() == nil {
+				fyne.Do(func() { img.Image = m; img.Refresh() })
+			}
+		}()
+	}
+
+	// STOP: one button, two jobs. `stop` is nil while idle; while playing it
+	// holds the cancel func for that playback. Both places that touch it (the
+	// click handler and the fyne.Do below) run on the UI thread, so no mutex.
+	var play *widget.Button
+	var stop context.CancelFunc
+	play = widget.NewButtonWithIcon("Play video", theme.MediaPlayIcon(), func() {
+		if stop != nil {
+			stop() // kills ffmpeg (sound too); playVideo returns and the goroutine resets the button
+			return
+		}
+		// A child of the page context: cancelled by Stop here, or by Back
+		// through the parent. Cancelling a parent cancels all its children.
+		pctx, cancel := context.WithCancel(ctx)
+		stop = cancel
+		play.SetText("Stop")
+		play.SetIcon(theme.MediaStopIcon())
+		go func() {
+			if err := playVideo(pctx, link, img); err != nil && pctx.Err() == nil {
 				log.Printf("video FAIL %s  err=%v", link, err)
 			}
-			fyne.Do(play.Enable)
+			cancel() // also on a normal finish, or the context leaks (go vet checks this)
+			fyne.Do(func() {
+				stop = nil
+				play.SetText("Play video")
+				play.SetIcon(theme.MediaPlayIcon())
+			})
 		}()
 	})
 	return container.NewBorder(nil, play, nil, nil, img)
