@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -23,11 +24,9 @@ import (
 const videoW, videoH = 640, 360
 
 func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
-	img := &canvas.Image{FillMode: canvas.ImageFillContain}
+	img := &canvas.Image{FillMode: canvas.ImageFillContain, ScaleMode: canvas.ImageScaleFastest}
 	img.SetMinSize(fyne.NewSize(videoW, videoH))
 
-	// POSTER: load the thumbnail into the same canvas.Image the frames will
-	// later overwrite. No layout refresh needed — the min size is already set.
 	if poster != "" {
 		go func() {
 			if m, err := fetchImage(ctx, poster); err == nil && ctx.Err() == nil {
@@ -36,9 +35,6 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 		}()
 	}
 
-	// STOP: one button, two jobs. `stop` is nil while idle; while playing it
-	// holds the cancel func for that playback. Both places that touch it (the
-	// click handler and the fyne.Do below) run on the UI thread, so no mutex.
 	var play *widget.Button
 	var stop context.CancelFunc
 	play = widget.NewButtonWithIcon("Play video", theme.MediaPlayIcon(), func() {
@@ -46,8 +42,6 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 			stop() // kills ffmpeg (sound too); playVideo returns and the goroutine resets the button
 			return
 		}
-		// A child of the page context: cancelled by Stop here, or by Back
-		// through the parent. Cancelling a parent cancels all its children.
 		pctx, cancel := context.WithCancel(ctx)
 		stop = cancel
 		play.SetText("Stop")
@@ -107,17 +101,24 @@ func playVideo(ctx context.Context, link string, img *canvas.Image) error {
 
 	front := image.NewRGBA(image.Rect(0, 0, videoW, videoH))
 	back := image.NewRGBA(image.Rect(0, 0, videoW, videoH))
+	var frames, slow int
 	for {
 		if _, err := io.ReadFull(out, back.Pix); err != nil {
 			break
 		}
 
+		t := time.Now()
 		fyne.DoAndWait(func() {
 			img.Image = back
 			img.Refresh()
 		})
+		frames++
+		if time.Since(t) > 33*time.Millisecond {
+			slow++
+		}
 		front, back = back, front
 	}
+	log.Printf("video: %d frames, %d slow", frames, slow)
 	return cmd.Wait()
 }
 
