@@ -7,9 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
-const sampleRate = 22050 // piper output: 16-bit mono
+const bytesPerSec = 22050 * 2 // piper output: 22050 Hz, 16-bit mono
 
 var voices = map[string]string{
 	"en": filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-lessac-medium.onnx"),
@@ -27,7 +29,13 @@ func speakNeeds(lang string) string {
 	return ""
 }
 
-func speak(ctx context.Context, lines []string, from int, lang string) (int, error) {
+type speaker struct {
+	lang  string
+	lines []string
+	pcm   [][]byte
+}
+
+func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
@@ -40,35 +48,55 @@ func speak(ctx context.Context, lines []string, from int, lang string) (int, err
 		return 0, err
 	}
 
-	// Synthesize one paragraph ahead of playback.
+	// Synthesize one line ahead of playback, skipping lines an earlier run already made.
 	audio := make(chan []byte, 1)
 	var synthErr error
-	go func() {
+	var wg sync.WaitGroup
+	wg.Go(func() {
 		defer close(audio)
-		for _, line := range lines[from:] {
-			pcm, err := synth(ctx, line, lang)
-			if err != nil {
-				synthErr = err
-				return
+		for i := range s.lines {
+			if i >= len(s.pcm) {
+				pcm, err := synth(ctx, s.lines[i], s.lang)
+				if err != nil {
+					synthErr = err
+					return
+				}
+				s.pcm = append(s.pcm, pcm)
 			}
 			select {
-			case audio <- pcm:
+			case audio <- s.pcm[i]:
 			case <-ctx.Done():
 				return
 			}
 		}
-	}()
+	})
 
-	done := 0
+	var start time.Time
+	written := 0
 	for pcm := range audio {
-		if _, err := in.Write(pcm); err != nil {
+		if from >= len(pcm) {
+			from -= len(pcm)
+			continue
+		}
+		if start.IsZero() {
+			start = time.Now()
+		}
+		n, err := in.Write(pcm[from:])
+		from = 0
+		written += n
+		if err != nil {
 			break
 		}
-		done++
 	}
 	stop()
+	wg.Wait()
 	in.Close()
-	return done, errors.Join(synthErr, play.Wait())
+	err = errors.Join(synthErr, play.Wait())
+	if start.IsZero() {
+		return 0, err
+	}
+	heard := min(written, int(time.Since(start).Seconds()*bytesPerSec))
+	return max(heard-bytesPerSec/2, 0) &^ 1, err
 }
 
 func synth(ctx context.Context, line, lang string) ([]byte, error) {
@@ -78,7 +106,7 @@ func synth(ctx context.Context, line, lang string) ([]byte, error) {
 	cmd.Stderr = os.Stderr
 	pcm, err := cmd.Output()
 	if heading {
-		pause := make([]byte, sampleRate*2*3/5) // 0.6s of silence
+		pause := make([]byte, bytesPerSec*3/5) // 0.6s
 		pcm = append(append(pause, pcm...), pause...)
 	}
 	return pcm, err

@@ -120,19 +120,23 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
 	visit.Importance = widget.HighImportance
 	var art Article
+	en := &speaker{lang: "en"}
 	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
-		return speak(c, art.Lines(), from, "en")
+		if en.lines == nil {
+			en.lines = art.Lines()
+		}
+		return en.play(c, from)
 	}))
-	var swahili []string
+	sw := &speaker{lang: "sw"}
 	sikiliza := toggleButton(ctx, "Sikiliza", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
-		if swahili == nil {
+		if sw.lines == nil {
 			text, err := translate(c, strings.Join(art.Lines(), "\n"), "Swahili")
 			if err != nil {
 				return 0, err
 			}
-			swahili = strings.Split(strings.TrimSpace(text), "\n")
+			sw.lines = strings.Split(strings.TrimSpace(text), "\n")
 		}
-		return speak(c, swahili, from, "sw")
+		return sw.play(c, from)
 	}))
 	listen.Disable()
 	sikiliza.Disable()
