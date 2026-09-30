@@ -18,12 +18,12 @@ A desktop news reader written in Go. Pulls stories from Hacker News and major RS
 
 Optional. Buttons stay disabled until the tool they need is installed.
 
-| Feature | Needs |
-|---|---|
-| Video | `ffmpeg`, `ffprobe` |
-| YouTube | `yt-dlp` (recent; Deno recommended) |
-| Listen | `piper`, `aplay`, English voice |
-| Sikiliza | Swahili voice, an OpenAI-compatible API key in `.env` |
+| Feature  | Needs                                                  |
+| -------- | ------------------------------------------------------ |
+| Video    | `ffmpeg`, `ffprobe`                                |
+| YouTube  | `yt-dlp` (recent; Deno recommended)                  |
+| Listen   | `piper`, `aplay`, English voice                    |
+| Sikiliza | Swahili voice, an OpenAI-compatible API key in`.env` |
 
 Voices go in `~/.local/share/piper/`:
 
@@ -34,27 +34,8 @@ sw_CD-lanfrica-medium.onnx  (+ .onnx.json)
 
 Download from https://huggingface.co/rhasspy/piper-voices.
 
-Translation works with any OpenAI-compatible endpoint (OpenRouter, Groq, ...). Copy `.env.example` to `.env` and fill in:
-
-```
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=https://openrouter.ai/api/v1
-OPENAI_MODEL=meta-llama/llama-3.3-70b-instruct
-```
-
 ## Run
 
 ```
 go run .
 ```
-
-## Layout
-
-| File | Purpose |
-|---|---|
-| `main.go` | Window, story list, article view |
-| `feed.go` | Hacker News and RSS fetching |
-| `reader.go` | Article extraction from HTML |
-| `video.go` | ffmpeg frame streaming and playback |
-| `speak.go` | Text-to-speech via piper |
-| `translate.go` | Translation via an OpenAI-compatible API |
