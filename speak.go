@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const sampleRate = 22050 // piper output: 16-bit mono
+
 var voices = map[string]string{
 	"en": filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-lessac-medium.onnx"),
 	"sw": filepath.Join(os.Getenv("HOME"), ".local/share/piper/sw_CD-lanfrica-medium.onnx"),
@@ -25,18 +27,59 @@ func speakNeeds(lang string) string {
 	return ""
 }
 
-// piper: text in, raw 16-bit PCM out. aplay: PCM in, speaker out.
-func speak(ctx context.Context, text, lang string) error {
-	piper := exec.CommandContext(ctx, "piper", "-m", voices[lang], "--output-raw", "--sentence-silence", "0.4")
-	piper.Stdin = strings.NewReader(text)
-	piper.Stderr = os.Stderr
+func speak(ctx context.Context, lines []string, from int, lang string) (int, error) {
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 
 	play := exec.CommandContext(ctx, "aplay", "-q", "-r", "22050", "-f", "S16_LE", "-c", "1")
-	play.Stdin, _ = piper.StdoutPipe()
-	play.Stderr = os.Stderr
-
-	if err := play.Start(); err != nil {
-		return err
+	in, err := play.StdinPipe()
+	if err != nil {
+		return 0, err
 	}
-	return errors.Join(piper.Run(), play.Wait())
+	if err := play.Start(); err != nil {
+		return 0, err
+	}
+
+	// Synthesize one paragraph ahead of playback.
+	audio := make(chan []byte, 1)
+	var synthErr error
+	go func() {
+		defer close(audio)
+		for _, line := range lines[from:] {
+			pcm, err := synth(ctx, line, lang)
+			if err != nil {
+				synthErr = err
+				return
+			}
+			select {
+			case audio <- pcm:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	done := 0
+	for pcm := range audio {
+		if _, err := in.Write(pcm); err != nil {
+			break
+		}
+		done++
+	}
+	stop()
+	in.Close()
+	return done, errors.Join(synthErr, play.Wait())
+}
+
+func synth(ctx context.Context, line, lang string) ([]byte, error) {
+	text, heading := strings.CutPrefix(line, "## ")
+	cmd := exec.CommandContext(ctx, "piper", "-m", voices[lang], "--output-raw", "--sentence-silence", "0.4")
+	cmd.Stdin = strings.NewReader(text + "\n")
+	cmd.Stderr = os.Stderr
+	pcm, err := cmd.Output()
+	if heading {
+		pause := make([]byte, sampleRate*2*3/5) // 0.6s of silence
+		pcm = append(append(pause, pcm...), pause...)
+	}
+	return pcm, err
 }

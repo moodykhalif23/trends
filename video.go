@@ -36,22 +36,15 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 
 	// Pause kills ffmpeg and remembers where we were; Play restarts from there with -ss.
 	var inputs []string
-	var pos time.Duration
-	play := toggleButton(ctx, "Play video", theme.MediaPlayIcon(), "Pause", theme.MediaPauseIcon(), func(c context.Context) error {
+	play := toggleButton(ctx, "Play video", theme.MediaPlayIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from time.Duration) (time.Duration, error) {
 		if inputs == nil {
 			var err error
 			if inputs, err = mediaURLs(c, link); err != nil {
-				return err
+				return 0, err
 			}
 		}
-		played, err := playVideo(c, inputs, pos, img)
-		if c.Err() != nil {
-			pos += played
-		} else {
-			pos = 0
-		}
-		return err
-	})
+		return playVideo(c, inputs, from, img)
+	}))
 	need := []string{"ffmpeg", "ffprobe"}
 	if strings.Contains(link, "youtube.com/embed/") {
 		need = append(need, "yt-dlp")

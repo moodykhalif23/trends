@@ -120,19 +120,20 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
 	visit.Importance = widget.HighImportance
 	var art Article
-	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Stop", theme.MediaStopIcon(), func(c context.Context) error {
-		return speak(c, art.Text(), "en")
-	})
-	var swahili string // translated once, reused on replay
-	sikiliza := toggleButton(ctx, "Sikiliza", theme.VolumeUpIcon(), "Stop", theme.MediaStopIcon(), func(c context.Context) error {
-		if swahili == "" {
-			var err error
-			if swahili, err = translate(c, art.Text(), "Swahili"); err != nil {
-				return err
+	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
+		return speak(c, art.Lines(), from, "en")
+	}))
+	var swahili []string
+	sikiliza := toggleButton(ctx, "Sikiliza", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
+		if swahili == nil {
+			text, err := translate(c, strings.Join(art.Lines(), "\n"), "Swahili")
+			if err != nil {
+				return 0, err
 			}
+			swahili = strings.Split(strings.TrimSpace(text), "\n")
 		}
-		return speak(c, swahili, "sw")
-	})
+		return speak(c, swahili, from, "sw")
+	}))
 	listen.Disable()
 	sikiliza.Disable()
 	actions := container.NewHBox(visit, listen, sikiliza)
@@ -232,14 +233,32 @@ func loadEnv(path string) {
 	if err != nil {
 		return
 	}
+	fromFile := map[string]bool{}
 	for line := range strings.Lines(string(data)) {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		k = strings.TrimSpace(k)
 		if !ok || strings.HasPrefix(k, "#") {
 			continue
 		}
-		if _, set := os.LookupEnv(k); !set {
-			os.Setenv(strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`))
+		if _, set := os.LookupEnv(k); set && !fromFile[k] {
+			continue
 		}
+		fromFile[k] = true // within the file, the last line wins
+		os.Setenv(k, strings.Trim(strings.TrimSpace(v), `"'`))
+	}
+}
+
+// resumable wraps play so that after a pause the next click continues where it stopped.
+func resumable[T int | time.Duration](play func(context.Context, T) (T, error)) func(context.Context) error {
+	var pos T
+	return func(c context.Context) error {
+		n, err := play(c, pos)
+		if c.Err() != nil {
+			pos += n
+		} else {
+			pos = 0
+		}
+		return err
 	}
 }
 

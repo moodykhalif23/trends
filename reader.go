@@ -167,14 +167,17 @@ func Read(ctx context.Context, it Item) (Article, error) {
 }
 
 // Text is what the Listen button reads aloud: title plus every text block, one per line.
-func (a Article) Text() string {
-	parts := []string{a.Title}
+func (a Article) Lines() []string {
+	lines := []string{"## " + a.Title}
 	for _, b := range a.Blocks {
-		if b.Text != "" {
-			parts = append(parts, b.Text)
+		switch {
+		case b.Heading:
+			lines = append(lines, "## "+b.Text)
+		case b.Text != "":
+			lines = append(lines, b.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return lines
 }
 
 func publisher(it Item, siteName string) string {

@@ -26,7 +26,7 @@ func translate(ctx context.Context, text, language string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model": os.Getenv("OPENAI_MODEL"),
 		"messages": []map[string]string{
-			{"role": "system", "content": "Translate the user's text into " + language + ". Keep one paragraph per line. Reply with the translation only."},
+			{"role": "system", "content": "Translate the user's text into " + language + ". Keep one paragraph per line and keep any leading '## ' markers. Reply with the translation only."},
 			{"role": "user", "content": text},
 		},
 	})
