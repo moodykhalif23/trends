@@ -8,7 +8,7 @@ A desktop news reader written in Go. Pulls stories from Hacker News and major RS
 - Article preview with images and subheadings, extracted from the publisher's page
 - Inline video playback, including YouTube embeds
 - Listen: text-to-speech of the article
-- Sikiliza: the article translated to Swahili by Claude, then spoken
+- Sikiliza: the article translated to Swahili by an LLM, then spoken
 - Light and dark theme
 
 ## Requirements
@@ -23,7 +23,7 @@ Optional. Buttons stay disabled until the tool they need is installed.
 | Video | `ffmpeg`, `ffprobe` |
 | YouTube | `yt-dlp` (recent; Deno recommended) |
 | Listen | `piper`, `aplay`, English voice |
-| Sikiliza | Swahili voice, `ANTHROPIC_API_KEY` |
+| Sikiliza | Swahili voice, an OpenAI-compatible API key in `.env` |
 
 Voices go in `~/.local/share/piper/`:
 
@@ -33,6 +33,14 @@ sw_CD-lanfrica-medium.onnx  (+ .onnx.json)
 ```
 
 Download from https://huggingface.co/rhasspy/piper-voices.
+
+Translation works with any OpenAI-compatible endpoint (OpenRouter, Groq, ...). Copy `.env.example` to `.env` and fill in:
+
+```
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_MODEL=meta-llama/llama-3.3-70b-instruct
+```
 
 ## Run
 
@@ -49,4 +57,4 @@ go run .
 | `reader.go` | Article extraction from HTML |
 | `video.go` | ffmpeg frame streaming and playback |
 | `speak.go` | Text-to-speech via piper |
-| `translate.go` | Translation via the Claude API |
+| `translate.go` | Translation via an OpenAI-compatible API |

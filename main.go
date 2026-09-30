@@ -11,8 +11,10 @@ import (
 	_ "image/png"
 	"log"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -41,8 +43,9 @@ func themeFor(dark bool) fyne.Theme {
 }
 
 func main() {
+	loadEnv(".env")
 	a := app.New()
-	dark := true
+	dark := false
 	a.Settings().SetTheme(themeFor(dark))
 
 	w := a.NewWindow("Trends")
@@ -222,6 +225,22 @@ func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image
 	}()
 
 	return img
+}
+
+func loadEnv(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for line := range strings.Lines(string(data)) {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || strings.HasPrefix(k, "#") {
+			continue
+		}
+		if _, set := os.LookupEnv(k); !set {
+			os.Setenv(strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`))
+		}
+	}
 }
 
 // missing returns the first tool not found on PATH, or "".
