@@ -52,6 +52,14 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 		}
 		return err
 	})
+	need := []string{"ffmpeg", "ffprobe"}
+	if strings.Contains(link, "youtube.com/embed/") {
+		need = append(need, "yt-dlp")
+	}
+	if m := missing(need...); m != "" {
+		play.SetText("Needs " + m)
+		play.Disable()
+	}
 	return container.NewBorder(nil, play, nil, nil, img)
 }
 

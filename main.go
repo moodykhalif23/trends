@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"image"
@@ -10,6 +11,7 @@ import (
 	_ "image/png"
 	"log"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"time"
 
@@ -116,10 +118,21 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 	visit.Importance = widget.HighImportance
 	var art Article
 	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Stop", theme.MediaStopIcon(), func(c context.Context) error {
-		return speak(c, art.Text())
+		return speak(c, art.Text(), "en")
+	})
+	var swahili string // translated once, reused on replay
+	sikiliza := toggleButton(ctx, "Sikiliza", theme.VolumeUpIcon(), "Stop", theme.MediaStopIcon(), func(c context.Context) error {
+		if swahili == "" {
+			var err error
+			if swahili, err = translate(c, art.Text(), "Swahili"); err != nil {
+				return err
+			}
+		}
+		return speak(c, swahili, "sw")
 	})
 	listen.Disable()
-	actions := container.NewHBox(visit, listen)
+	sikiliza.Disable()
+	actions := container.NewHBox(visit, listen, sikiliza)
 	if it.Discuss != "" {
 		actions.Add(widget.NewButton("Discuss on Hacker News", func() { open(a, it.Discuss) }))
 	}
@@ -132,7 +145,8 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 				content.Objects = []fyne.CanvasObject{richText(heading(it.Title), para("Preview unavailable: "+err.Error()))}
 			} else {
 				art = res
-				listen.Enable()
+				enableIf(listen, speakNeeds("en"))
+				enableIf(sikiliza, cmp.Or(speakNeeds("sw"), translateNeeds()))
 				content.Objects = articleView(ctx, art, content.Refresh)
 			}
 			content.Refresh()
@@ -208,6 +222,24 @@ func remoteImage(ctx context.Context, link string, refresh func()) *canvas.Image
 	}()
 
 	return img
+}
+
+// missing returns the first tool not found on PATH, or "".
+func missing(tools ...string) string {
+	for _, t := range tools {
+		if _, err := exec.LookPath(t); err != nil {
+			return t
+		}
+	}
+	return ""
+}
+
+func enableIf(b *widget.Button, reason string) {
+	if reason == "" {
+		b.Enable()
+	} else {
+		b.SetText(reason)
+	}
 }
 
 // toggleButton runs `run` in the background on click and shows the busy label until it returns.
