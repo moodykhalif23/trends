@@ -46,9 +46,6 @@ func openSettings() (*settingsStore, error) {
 			return nil, fmt.Errorf("read settings %s: %w", path, err)
 		}
 		value = stored
-		if value.OpenAIBaseURL == "" {
-			value.OpenAIBaseURL = defaultOpenAIBaseURL
-		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read settings %s: %w", path, err)
 	}
