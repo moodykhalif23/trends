@@ -23,20 +23,30 @@ const (
 	kokoroVoicesName = "voices-v1.0.bin"
 	kokoroReleaseURL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/"
 	kokoroPythonCode = `import sys
+import asyncio
 import json
 import struct
 import numpy as np
 from kokoro_onnx import Kokoro
 kokoro = Kokoro(sys.argv[1], sys.argv[2])
+
+async def synthesize(text):
+    async for audio, sample_rate in kokoro.create_stream(
+        text, voice=sys.argv[3], speed=1.0, lang="en-us",
+        sentence_pause=0.15, clause_pause=0.08
+    ):
+        if sample_rate != 24000:
+            raise RuntimeError(f"unexpected Kokoro sample rate: {sample_rate}")
+        pcm = np.asarray(audio, dtype="<f4").tobytes()
+        sys.stdout.buffer.write(struct.pack("<Q", len(pcm)))
+        sys.stdout.buffer.write(pcm)
+        sys.stdout.buffer.flush()
+    sys.stdout.buffer.write(struct.pack("<Q", 0))
+    sys.stdout.buffer.flush()
+
 for request in sys.stdin:
     text = json.loads(request)
-    audio, sample_rate = kokoro.create(text, voice=sys.argv[3], speed=1.0, lang="en-us")
-    if sample_rate != 24000:
-        raise RuntimeError(f"unexpected Kokoro sample rate: {sample_rate}")
-    pcm = np.asarray(audio, dtype="<f4").tobytes()
-    sys.stdout.buffer.write(struct.pack("<Q", len(pcm)))
-    sys.stdout.buffer.write(pcm)
-    sys.stdout.buffer.flush()
+    asyncio.run(synthesize(text))
 `
 )
 
@@ -196,25 +206,25 @@ func (r *kokoroRuntime) ensureStreamLocked(voice string) error {
 	return nil
 }
 
-func (r *kokoroRuntime) synthesize(ctx context.Context, voice, text string) ([]byte, error) {
+func (r *kokoroRuntime) synthesizeChunks(ctx context.Context, voice, text string, onChunk func([]byte) error) error {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := r.ensureStreamLocked(voice); err != nil {
-		return nil, err
+		return err
 	}
-	return r.stream.synthesize(text)
+	return r.stream.synthesizeChunks(text, onChunk)
 }
 
 func (r *kokoroRuntime) close() error {
-	r.cancel()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	defer r.cancel()
 	if r.stream == nil {
 		return nil
 	}
@@ -348,29 +358,53 @@ func startKokoroStream(ctx context.Context, voice string) (*kokoroStream, error)
 }
 
 func (k *kokoroStream) synthesize(text string) ([]byte, error) {
+	var audio []byte
+	err := k.synthesizeChunks(text, func(chunk []byte) error {
+		audio = append(audio, chunk...)
+		return nil
+	})
+	return audio, err
+}
+
+func (k *kokoroStream) synthesizeChunks(text string, onChunk func([]byte) error) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	request, err := json.Marshal(text)
 	if err != nil {
-		return nil, fmt.Errorf("encode Kokoro request: %w", err)
+		return fmt.Errorf("encode Kokoro request: %w", err)
 	}
 	if _, err := k.stdin.Write(append(request, '\n')); err != nil {
-		return nil, fmt.Errorf("send text to Kokoro: %w", err)
+		return fmt.Errorf("send text to Kokoro: %w", err)
 	}
-	var header [8]byte
-	if _, err := io.ReadFull(k.stdout, header[:]); err != nil {
-		return nil, fmt.Errorf("read Kokoro audio size: %w", err)
+	var total uint64
+	for {
+		var header [8]byte
+		if _, err := io.ReadFull(k.stdout, header[:]); err != nil {
+			return fmt.Errorf("read Kokoro audio size: %w", err)
+		}
+		size := binary.LittleEndian.Uint64(header[:])
+		if size == 0 {
+			return nil
+		}
+		total += size
+		if size > maxKokoroAudioBytes || total > maxKokoroAudioBytes {
+			killErr := k.cmd.Process.Kill()
+			return errors.Join(fmt.Errorf("Kokoro audio is too large: %d bytes", total), killErr)
+		}
+		audio := make([]byte, int(size))
+		if _, err := io.ReadFull(k.stdout, audio); err != nil {
+			return fmt.Errorf("read Kokoro audio: %w", err)
+		}
+		pcm, err := kokoroFloat32ToPCM16(audio)
+		if err != nil {
+			return err
+		}
+		if onChunk != nil {
+			if err := onChunk(pcm); err != nil {
+				return err
+			}
+		}
 	}
-	size := binary.LittleEndian.Uint64(header[:])
-	if size > maxKokoroAudioBytes {
-		killErr := k.cmd.Process.Kill()
-		return nil, errors.Join(fmt.Errorf("Kokoro audio is too large: %d bytes", size), killErr)
-	}
-	audio := make([]byte, int(size))
-	if _, err := io.ReadFull(k.stdout, audio); err != nil {
-		return nil, fmt.Errorf("read Kokoro audio: %w", err)
-	}
-	return kokoroFloat32ToPCM16(audio)
 }
 
 func (k *kokoroStream) close() error {

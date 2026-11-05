@@ -88,6 +88,17 @@ type speaker struct {
 	engine *kokoroRuntime
 }
 
+func (s *speaker) prefetchInitial(ctx context.Context, count int) error {
+	for len(s.pcm) < min(count, len(s.lines)) {
+		pcm, err := synth(ctx, s.lines[len(s.pcm)], s.lang, s.voice, s.engine, nil)
+		if err != nil {
+			return err
+		}
+		s.pcm = append(s.pcm, pcm)
+	}
+	return nil
+}
+
 func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -105,19 +116,29 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	}
 
 	// Synthesize one line ahead of playback, skipping lines an earlier run already made.
-	audio := make(chan []byte, 1)
+	audio := make(chan []byte, 2)
 	var synthErr error
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		defer close(audio)
 		for i := range s.lines {
 			if i >= len(s.pcm) {
-				pcm, err := synth(ctx, s.lines[i], s.lang, s.voice, s.engine)
+				pcm, err := synth(ctx, s.lines[i], s.lang, s.voice, s.engine, func(chunk []byte) error {
+					select {
+					case audio <- chunk:
+					case <-ctx.Done():
+					}
+					return nil
+				})
 				if err != nil {
 					synthErr = err
 					return
 				}
 				s.pcm = append(s.pcm, pcm)
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
 			select {
 			case audio <- s.pcm[i]:
@@ -157,16 +178,27 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	return max(heard-kokoroBytesPerSec/2, 0) &^ 1, err
 }
 
-func synth(ctx context.Context, line, lang, voice string, engine *kokoroRuntime) ([]byte, error) {
+func synth(ctx context.Context, line, lang, voice string, engine *kokoroRuntime, emit func([]byte) error) ([]byte, error) {
 	text, heading := strings.CutPrefix(line, "## ")
 	text = normalizeSpeechText(text, lang)
-	pcm, err := engine.synthesize(ctx, voice, text)
-	if err != nil {
+	if heading && text != "" && !strings.ContainsAny(text[len(text)-1:], ".!?") {
+		text += "."
+	}
+	var pcm []byte
+	appendChunk := func(chunk []byte) error {
+		pcm = append(pcm, chunk...)
+		if emit != nil {
+			return emit(chunk)
+		}
+		return nil
+	}
+	if err := engine.synthesizeChunks(ctx, voice, text, appendChunk); err != nil {
 		return nil, err
 	}
 	if heading {
-		pause := make([]byte, kokoroBytesPerSec*3/5)
-		pcm = append(append(pause, pcm...), pause...)
+		if err := appendChunk(make([]byte, kokoroBytesPerSec/10)); err != nil {
+			return nil, err
+		}
 	}
 	return pcm, nil
 }
@@ -219,6 +251,41 @@ func normalizeLocalPronunciations(text string) string {
 		})
 	}
 	return text
+}
+
+func splitSpeechLines(lines []string) []string {
+	var segments []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			segments = append(segments, line)
+		}
+	}
+	return segments
+}
+
+func prepareSpeechSegments(lines []string) []string {
+	segments := splitSpeechLines(lines)
+	if len(segments) < 2 || !strings.HasPrefix(segments[0], "## ") {
+		return segments
+	}
+
+	var opening []string
+	for len(segments) > 0 && strings.HasPrefix(segments[0], "## ") {
+		opening = append(opening, strings.TrimSpace(strings.TrimPrefix(segments[0], "## ")))
+		segments = segments[1:]
+	}
+	if len(segments) > 0 {
+		opening = append(opening, segments[0])
+		segments = segments[1:]
+	}
+	if len(opening) == 0 {
+		return segments
+	}
+	for i := range opening {
+		opening[i] = strings.TrimRight(opening[i], " \t\r\n.!?;:")
+	}
+	return append([]string{"## " + strings.Join(opening, ". ") + "."}, segments...)
 }
 
 func normalizeMonthAbbreviations(text, lang string) string {

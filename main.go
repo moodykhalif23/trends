@@ -152,7 +152,7 @@ func reader(a fyne.App, it Item, settings *settingsStore, kokoro *kokoroRuntime,
 	speechStatus.Wrapping = fyne.TextWrapWord
 	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
 		if en.lines == nil {
-			en.lines = art.Lines()
+			en.lines = prepareSpeechSegments(art.Lines())
 		}
 		return en.play(c, from)
 	}), func(err error) {
@@ -169,7 +169,7 @@ func reader(a fyne.App, it Item, settings *settingsStore, kokoro *kokoroRuntime,
 			if err != nil {
 				return 0, err
 			}
-			sw.lines = strings.Split(strings.TrimSpace(text), "\n")
+			sw.lines = prepareSpeechSegments(strings.Split(strings.TrimSpace(text), "\n"))
 		}
 		return sw.play(c, from)
 	}), func(err error) {
@@ -181,7 +181,8 @@ func reader(a fyne.App, it Item, settings *settingsStore, kokoro *kokoroRuntime,
 	})
 	listen.Disable()
 	sikiliza.Disable()
-	articleReady, engineReady := false, false
+	articleReady, engineReady, prefetchStarted, prefetchReady := false, false, false, false
+	var startPrefetch func()
 	updateSpeechButtons := func() {
 		if !articleReady {
 			return
@@ -191,8 +192,36 @@ func reader(a fyne.App, it Item, settings *settingsStore, kokoro *kokoroRuntime,
 			sikiliza.SetText("Preparing voice…")
 			return
 		}
-		enableIf(listen, speakNeeds())
 		enableIf(sikiliza, cmp.Or(speakNeeds(), translateNeeds(settings.snapshot())))
+		if !prefetchReady {
+			listen.SetText("Preparing speech…")
+			if startPrefetch != nil {
+				startPrefetch()
+			}
+			return
+		}
+		listen.SetText("Listen")
+		enableIf(listen, speakNeeds())
+	}
+	startPrefetch = func() {
+		if prefetchStarted || !articleReady || !engineReady {
+			return
+		}
+		prefetchStarted = true
+		en.lines = prepareSpeechSegments(art.Lines())
+		go func() {
+			err := en.prefetchInitial(ctx, 1)
+			fyne.Do(func() {
+				if ctx.Err() != nil {
+					return
+				}
+				prefetchReady = true
+				if err != nil {
+					speechStatus.SetText("Listen preparation failed: " + err.Error())
+				}
+				updateSpeechButtons()
+			})
+		}()
 	}
 	actions := container.NewVBox(container.NewHBox(visit, listen, sikiliza), speechStatus)
 	if it.Discuss != "" {
