@@ -64,10 +64,6 @@ func openSettings() (*settingsStore, error) {
 	return &settingsStore{path: path, value: value}, nil
 }
 
-func newSettingsStore(path string, value userSettings) *settingsStore {
-	return &settingsStore{path: path, value: value}
-}
-
 func (s *settingsStore) snapshot() userSettings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

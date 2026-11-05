@@ -16,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 )
 
 // Every frame is scaled and padded to this size, so every frame is exactly
@@ -36,6 +37,8 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 
 	// Pause kills ffmpeg and remembers where we were; Play restarts from there with -ss.
 	var inputs []string
+	status := widget.NewLabel("")
+	status.Wrapping = fyne.TextWrapWord
 	play := toggleButton(ctx, "Play video", theme.MediaPlayIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from time.Duration) (time.Duration, error) {
 		if inputs == nil {
 			var err error
@@ -44,7 +47,13 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 			}
 		}
 		return playVideo(c, inputs, from, img)
-	}))
+	}), func(err error) {
+		if err == nil {
+			status.SetText("")
+		} else {
+			status.SetText("Video failed: " + err.Error())
+		}
+	})
 	need := []string{"ffmpeg", "ffprobe"}
 	if strings.Contains(link, "youtube.com/embed/") {
 		need = append(need, "yt-dlp")
@@ -53,7 +62,7 @@ func remoteVideo(ctx context.Context, link, poster string) fyne.CanvasObject {
 		play.SetText("Needs " + m)
 		play.Disable()
 	}
-	return container.NewBorder(nil, play, nil, nil, img)
+	return container.NewBorder(nil, container.NewVBox(status, play), nil, nil, img)
 }
 
 // mediaURLs turns a YouTube embed into direct stream URLs (video, audio); anything else is used as is.
