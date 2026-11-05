@@ -411,8 +411,12 @@ func open(a fyne.App, link string) {
 }
 
 func meta(it Item) string {
+	source := it.Source
 	if it.Discuss != "" {
-		return fmt.Sprintf("Hacker News · %d points · %d comments", it.Points, it.Comments)
+		source = fmt.Sprintf("Hacker News · %d points · %d comments", it.Points, it.Comments)
 	}
-	return it.Source
+	if it.PublishedAt.IsZero() {
+		return source + " · Date unavailable"
+	}
+	return source + " · " + it.PublishedAt.Local().Format("Jan 2, 2006 3:04 PM")
 }

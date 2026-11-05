@@ -11,6 +11,8 @@ A desktop news reader written in Go. Pulls stories from Hacker News and major RS
 - Sikiliza: translate an article to Swahili using an OpenAI-compatible API
 - Settings page for the translation API key, endpoint, model, and English voice
 
+Stories are sorted newest-first by their published timestamps when sources provide them. Items without a readable timestamp are shown after dated stories with **Date unavailable**. This orders the stories returned by the selected feeds; feed coverage and freshness still depend on each publisher and Hacker News.
+
 ## Requirements
 
 - Go 1.26+

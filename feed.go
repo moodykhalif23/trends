@@ -16,12 +16,13 @@ import (
 )
 
 type Item struct {
-	Title    string
-	Link     string
-	Source   string
-	Points   int
-	Comments int
-	Discuss  string
+	Title       string
+	Link        string
+	Source      string
+	PublishedAt time.Time
+	Points      int
+	Comments    int
+	Discuss     string
 }
 
 type Feed struct{ Name, URL string }
@@ -113,6 +114,7 @@ func Fetch(topic, search string) ([]Item, error) {
 	}
 
 	items := interleave(lists...)
+	sortByPublishedAt(items)
 	if len(items) == 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -159,11 +161,13 @@ func hackerNews(q string) ([]Item, error) {
 
 	var res struct {
 		Hits []struct {
-			ID       string `json:"objectID"`
-			Title    string `json:"title"`
-			URL      string `json:"url"`
-			Points   int    `json:"points"`
-			Comments int    `json:"num_comments"`
+			ID            string `json:"objectID"`
+			Title         string `json:"title"`
+			URL           string `json:"url"`
+			CreatedAt     string `json:"created_at"`
+			CreatedAtUnix int64  `json:"created_at_i"`
+			Points        int    `json:"points"`
+			Comments      int    `json:"num_comments"`
 		} `json:"hits"`
 	}
 	if err := getJSON(u, &res); err != nil {
@@ -177,9 +181,22 @@ func hackerNews(q string) ([]Item, error) {
 		if link == "" {
 			link = discuss
 		}
-		items = append(items, Item{h.Title, link, "Hacker News", h.Points, h.Comments, discuss})
+		publishedAt := time.Time{}
+		if h.CreatedAtUnix > 0 {
+			publishedAt = time.Unix(h.CreatedAtUnix, 0)
+		} else if parsed, err := time.Parse(time.RFC3339, h.CreatedAt); err == nil {
+			publishedAt = parsed
+		}
+		items = append(items, Item{
+			Title:       h.Title,
+			Link:        link,
+			Source:      "Hacker News",
+			PublishedAt: publishedAt,
+			Points:      h.Points,
+			Comments:    h.Comments,
+			Discuss:     discuss,
+		})
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].Comments > items[j].Comments })
 	return items, nil
 }
 
@@ -192,8 +209,12 @@ func rss(f Feed) ([]Item, error) {
 
 	var doc struct {
 		Items []struct {
-			Title string `xml:"title"`
-			Link  string `xml:"link"`
+			Title     string `xml:"title"`
+			Link      string `xml:"link"`
+			PubDate   string `xml:"pubDate"`
+			Date      string `xml:"http://purl.org/dc/elements/1.1/ date"`
+			Published string `xml:"published"`
+			Updated   string `xml:"updated"`
 		} `xml:"channel>item"`
 	}
 	if err := xml.NewDecoder(body).Decode(&doc); err != nil {
@@ -202,9 +223,50 @@ func rss(f Feed) ([]Item, error) {
 
 	items := make([]Item, 0, len(doc.Items))
 	for _, r := range doc.Items {
-		items = append(items, Item{Title: strings.TrimSpace(r.Title), Link: strings.TrimSpace(r.Link), Source: f.Name})
+		items = append(items, Item{
+			Title:       strings.TrimSpace(r.Title),
+			Link:        strings.TrimSpace(r.Link),
+			Source:      f.Name,
+			PublishedAt: parseRSSDate(r.PubDate, r.Date, r.Published, r.Updated),
+		})
 	}
 	return items, nil
+}
+
+func parseRSSDate(values ...string) time.Time {
+	layouts := []string{
+		time.RFC3339,
+		time.RFC3339Nano,
+		time.RFC1123Z,
+		time.RFC1123,
+		time.RFC822Z,
+		time.RFC822,
+		"Mon, 2 Jan 2006 15:04:05 MST",
+		"Mon, 02 Jan 2006 15:04 MST",
+	}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		for _, layout := range layouts {
+			if publishedAt, err := time.Parse(layout, value); err == nil {
+				return publishedAt
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func sortByPublishedAt(items []Item) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i].PublishedAt, items[j].PublishedAt
+		switch {
+		case left.IsZero():
+			return false
+		case right.IsZero():
+			return true
+		default:
+			return left.After(right)
+		}
+	})
 }
 func get(ctx context.Context, u string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
