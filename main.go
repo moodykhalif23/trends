@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -163,7 +162,6 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 
 	top := container.NewHBox(widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
 		cancel()
-		log.Println("goroutines:", runtime.NumGoroutine())
 		back()
 	}))
 	return container.NewBorder(top, container.NewPadded(actions), nil, nil, container.NewVScroll(container.NewPadded(content)))

@@ -95,6 +95,7 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 
 	var start time.Time
 	written := 0
+	var writeErr error
 	for pcm := range audio {
 		if from >= len(pcm) {
 			from -= len(pcm)
@@ -107,13 +108,14 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 		from = 0
 		written += n
 		if err != nil {
+			writeErr = err
+			stop()
 			break
 		}
 	}
-	stop()
 	wg.Wait()
-	in.Close()
-	err = errors.Join(synthErr, play.Wait())
+	closeErr := in.Close()
+	err = errors.Join(synthErr, writeErr, closeErr, play.Wait())
 	if start.IsZero() {
 		return 0, err
 	}
