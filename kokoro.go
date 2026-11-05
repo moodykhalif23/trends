@@ -218,11 +218,10 @@ func (k *kokoroStream) close() error {
 		closeErr = fmt.Errorf("close Kokoro input: %w", err)
 	}
 	waitErr := k.cmd.Wait()
-	stdoutErr := k.stdout.Close()
 	if waitErr != nil {
 		waitErr = fmt.Errorf("stop Kokoro runtime: %w", waitErr)
 	}
-	return errors.Join(closeErr, waitErr, stdoutErr)
+	return errors.Join(closeErr, waitErr)
 }
 
 func kokoroFloat32ToPCM16(audio []byte) ([]byte, error) {
