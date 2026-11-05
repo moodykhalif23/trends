@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,34 +19,136 @@ import (
 
 const bytesPerSec = 22050 * 2 // piper output: 22050 Hz, 16-bit mono
 
+const (
+	englishVoiceName = "en_US-lessac-high.onnx"
+	voiceAssetsURL   = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/"
+	englishVoiceSize = 113895201
+)
+
 var billionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*bn\b`)
 var millionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*m\b`)
 var dollarAmount = regexp.MustCompile(`(?i)(US)?\$\s*(\d[\d,]*(?:\.\d+)?)\s*(billion|bn|b|million|mn|m|thousand|k|trillion|T)?\b`)
 var trillionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*T\b`)
 
 var voices = map[string]string{
-	"en": filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-lessac-medium.onnx"),
 	"sw": filepath.Join(os.Getenv("HOME"), ".local/share/piper/sw_CD-lanfrica-medium.onnx"),
 }
 
-var preferredEnglishVoice = filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-amy-medium.onnx")
+var voiceDownloadClient = &http.Client{Timeout: 10 * time.Minute}
+var voiceInstallMu sync.Mutex
 
 func voicePath(lang string) string {
 	if lang == "en" {
 		if path := os.Getenv("PIPER_EN_VOICE"); path != "" {
 			return path
 		}
-		if _, err := os.Stat(preferredEnglishVoice); err == nil {
-			return preferredEnglishVoice
-		}
+		return filepath.Join(os.Getenv("HOME"), ".local/share/piper", englishVoiceName)
 	}
 	return voices[lang]
+}
+
+type voiceAsset struct {
+	name   string
+	size   int64
+	sha256 string
+}
+
+var englishVoiceAssets = []voiceAsset{
+	{
+		name:   englishVoiceName,
+		size:   englishVoiceSize,
+		sha256: "4cabf7c3a638017137f34a1516522032d4fe3f38228a843cc9b764ddcbcd9e09",
+	},
+	{
+		name:   englishVoiceName + ".json",
+		size:   4883,
+		sha256: "db42b97d9859f257bc1561b8ed980e7fb2398402050a74ddd6cbec931a92412f",
+	},
+}
+
+func ensureVoice(ctx context.Context, lang string) (string, error) {
+	path := voicePath(lang)
+	if lang != "en" || os.Getenv("PIPER_EN_VOICE") != "" {
+		if _, err := os.Stat(path); err != nil {
+			return "", fmt.Errorf("voice model %s: %w", path, err)
+		}
+		return path, nil
+	}
+
+	voiceInstallMu.Lock()
+	defer voiceInstallMu.Unlock()
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create voice directory: %w", err)
+	}
+	for _, asset := range englishVoiceAssets {
+		target := filepath.Join(dir, asset.name)
+		if _, err := os.Stat(target); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("check voice file %s: %w", target, err)
+		}
+		if err := downloadVoiceAsset(ctx, voiceDownloadClient, voiceAssetsURL+asset.name, target, asset.size, asset.sha256); err != nil {
+			return "", fmt.Errorf("download English voice %s: %w", asset.name, err)
+		}
+	}
+	return path, nil
+}
+
+func downloadVoiceAsset(ctx context.Context, client *http.Client, url, path string, size int64, expectedSHA256 string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".download-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(resp.Body, size+1))
+	if err != nil {
+		tmp.Close()
+		return err
+	}
+	if n != size {
+		tmp.Close()
+		return fmt.Errorf("unexpected size: got %d bytes, want %d", n, size)
+	}
+	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != expectedSHA256 {
+		tmp.Close()
+		return fmt.Errorf("SHA-256 mismatch: got %s", got)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // speakNeeds reports what is missing to speak in lang, or "".
 func speakNeeds(lang string) string {
 	if m := missing("piper", "aplay"); m != "" {
 		return "Needs " + m
+	}
+	if lang == "en" && os.Getenv("PIPER_EN_VOICE") == "" {
+		return ""
 	}
 	path := voicePath(lang)
 	if _, err := os.Stat(path); err != nil {
@@ -126,7 +232,11 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 func synth(ctx context.Context, line, lang string) ([]byte, error) {
 	text, heading := strings.CutPrefix(line, "## ")
 	text = normalizeSpeechText(text, lang)
-	cmd := exec.CommandContext(ctx, "piper", "-m", voicePath(lang), "--output-raw", "--sentence-silence", "0.4")
+	model, err := ensureVoice(ctx, lang)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "piper", "-m", model, "--output-raw", "--sentence-silence", "0.4")
 	cmd.Stdin = strings.NewReader(text + "\n")
 	cmd.Stderr = os.Stderr
 	pcm, err := cmd.Output()

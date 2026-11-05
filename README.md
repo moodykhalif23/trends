@@ -21,16 +21,17 @@ Optional. Buttons stay disabled until the tool they need is installed.
 | -------- | ------------------------------------------------------ |
 | Video    | `ffmpeg`, `ffprobe`                                |
 | YouTube  | `yt-dlp` (recent; Deno recommended)                  |
-| Listen   | `piper`, `aplay`, English voice                    |
+| Listen   | `piper`, `aplay`                                   |
 
 Voices go in `~/.local/share/piper/`:
 
 ```
-en_US-lessac-medium.onnx  (+ .onnx.json)
-sw_CD-lanfrica-medium.onnx  (+ .onnx.json)
+sw_CD-lanfrica-medium.onnx (+ .onnx.json)
 ```
 
 Download from https://huggingface.co/rhasspy/piper-voices.
+The first time you use Listen, Trends downloads the 114 MB English Lessac high-quality voice and its config to `~/.local/share/piper/`. It verifies each file before installing it and reuses them on later runs. This requires an internet connection once. See the [Lessac high model card](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/lessac/high) and [Piper voice samples](https://rhasspy.github.io/piper-samples/).
+Set `PIPER_EN_VOICE` in `.env` to use an already-installed English Piper model instead.
 
 ## Run
 
