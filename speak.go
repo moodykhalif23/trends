@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,10 +17,26 @@ const bytesPerSec = 22050 * 2 // piper output: 22050 Hz, 16-bit mono
 
 var billionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*bn\b`)
 var millionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*m\b`)
+var dollarAmount = regexp.MustCompile(`(?i)(US)?\$\s*(\d[\d,]*(?:\.\d+)?)\s*(billion|bn|b|million|mn|m|thousand|k|trillion|T)?\b`)
+var trillionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*T\b`)
 
 var voices = map[string]string{
 	"en": filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-lessac-medium.onnx"),
 	"sw": filepath.Join(os.Getenv("HOME"), ".local/share/piper/sw_CD-lanfrica-medium.onnx"),
+}
+
+var preferredEnglishVoice = filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-amy-medium.onnx")
+
+func voicePath(lang string) string {
+	if lang == "en" {
+		if path := os.Getenv("PIPER_EN_VOICE"); path != "" {
+			return path
+		}
+		if _, err := os.Stat(preferredEnglishVoice); err == nil {
+			return preferredEnglishVoice
+		}
+	}
+	return voices[lang]
 }
 
 // speakNeeds reports what is missing to speak in lang, or "".
@@ -27,8 +44,9 @@ func speakNeeds(lang string) string {
 	if m := missing("piper", "aplay"); m != "" {
 		return "Needs " + m
 	}
-	if _, err := os.Stat(voices[lang]); err != nil {
-		return "Needs " + filepath.Base(voices[lang])
+	path := voicePath(lang)
+	if _, err := os.Stat(path); err != nil {
+		return "Needs " + filepath.Base(path)
 	}
 	return ""
 }
@@ -106,7 +124,7 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 func synth(ctx context.Context, line, lang string) ([]byte, error) {
 	text, heading := strings.CutPrefix(line, "## ")
 	text = normalizeSpeechText(text, lang)
-	cmd := exec.CommandContext(ctx, "piper", "-m", voices[lang], "--output-raw", "--sentence-silence", "0.4")
+	cmd := exec.CommandContext(ctx, "piper", "-m", voicePath(lang), "--output-raw", "--sentence-silence", "0.4")
 	cmd.Stdin = strings.NewReader(text + "\n")
 	cmd.Stderr = os.Stderr
 	pcm, err := cmd.Output()
@@ -118,10 +136,36 @@ func synth(ctx context.Context, line, lang string) ([]byte, error) {
 }
 
 func normalizeSpeechText(text, lang string) string {
-	billion, million := "billion", "million"
+	Trillion, billion, million := "trillion", "billion", "million"
+	thousand, dollars := "thousand", "US dollars"
 	if lang == "sw" {
-		billion, million = "bilioni", "milioni"
+		Trillion, billion, million = "trilioni", "bilioni", "milioni"
+		thousand, dollars = "elfu", "dola za Marekani"
 	}
+	text = dollarAmount.ReplaceAllStringFunc(text, func(amount string) string {
+		parts := dollarAmount.FindStringSubmatch(amount)
+		scale := strings.ToLower(parts[3])
+		switch scale {
+		case "T", "trillion":
+			scale = Trillion
+		case "b", "bn", "billion":
+			scale = billion
+		case "m", "mn", "million":
+			scale = million
+		case "k", "thousand":
+			scale = thousand
+		default:
+			scale = ""
+		}
+		currency := dollars
+		if lang == "en" && scale == "" {
+			value, err := strconv.ParseFloat(strings.ReplaceAll(parts[2], ",", ""), 64)
+			if err == nil && value == 1 {
+				currency = "US dollar"
+			}
+		}
+		return strings.Join(strings.Fields(parts[2]+" "+scale+" "+currency), " ")
+	})
 	text = billionAbbreviation.ReplaceAllString(text, "${1} "+billion)
 	return millionAbbreviation.ReplaceAllString(text, "${1} "+million)
 }
