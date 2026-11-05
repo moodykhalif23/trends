@@ -8,13 +8,12 @@ A desktop news reader written in Go. Pulls stories from Hacker News and major RS
 - Article preview with images and subheadings, extracted from the publisher's page
 - Inline video playback, including YouTube embeds
 - Listen: text-to-speech of the article
-- Sikiliza: the article translated to Swahili by an LLM, then spoken
-- Light and dark theme
+- Sikiliza: the article translated to Swahili by an LLM(use your any you prefer bby adding OpenAI-compatible API key in`.env`  )
 
 ## Requirements
 
 - Go 1.26+
-- Linux with PipeWire or PulseAudio
+- PipeWire or PulseAudio
 
 Optional. Buttons stay disabled until the tool they need is installed.
 
@@ -23,7 +22,6 @@ Optional. Buttons stay disabled until the tool they need is installed.
 | Video    | `ffmpeg`, `ffprobe`                                |
 | YouTube  | `yt-dlp` (recent; Deno recommended)                  |
 | Listen   | `piper`, `aplay`, English voice                    |
-| Sikiliza | Swahili voice, an OpenAI-compatible API key in`.env` |
 
 Voices go in `~/.local/share/piper/`:
 
