@@ -17,13 +17,7 @@ import (
 	"time"
 )
 
-const bytesPerSec = 22050 * 2 // piper output: 22050 Hz, 16-bit mono
-
-const (
-	englishVoiceName = "en_US-libritts-high.onnx"
-	voiceAssetsURL   = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/libritts/high/"
-	englishVoiceSize = 136673811
-)
+const piperBytesPerSec = 22050 * 2
 
 var billionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*bn\b`)
 var millionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*m\b`)
@@ -51,15 +45,8 @@ var voices = map[string]string{
 }
 
 var voiceDownloadClient = &http.Client{Timeout: 10 * time.Minute}
-var voiceInstallMu sync.Mutex
 
 func voicePath(lang string) string {
-	if lang == "en" {
-		if path := os.Getenv("PIPER_EN_VOICE"); path != "" {
-			return path
-		}
-		return filepath.Join(os.Getenv("HOME"), ".local/share/piper", englishVoiceName)
-	}
 	return voices[lang]
 }
 
@@ -67,49 +54,6 @@ type voiceAsset struct {
 	name   string
 	size   int64
 	sha256 string
-}
-
-var englishVoiceAssets = []voiceAsset{
-	{
-		name:   englishVoiceName,
-		size:   englishVoiceSize,
-		sha256: "9127a559e11603f10b366d1a20ac7426826081dbc521de4c2420c57728d73f0f",
-	},
-	{
-		name:   englishVoiceName + ".json",
-		size:   20163,
-		sha256: "2efdc6d7f954588b8180132cbd9b8001933fdd00932c92bc92fd0d2028a9eb3d",
-	},
-}
-
-func ensureVoice(ctx context.Context, lang string) (string, error) {
-	path := voicePath(lang)
-	if lang != "en" || os.Getenv("PIPER_EN_VOICE") != "" {
-		if _, err := os.Stat(path); err != nil {
-			return "", fmt.Errorf("voice model %s: %w", path, err)
-		}
-		return path, nil
-	}
-
-	voiceInstallMu.Lock()
-	defer voiceInstallMu.Unlock()
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create voice directory: %w", err)
-	}
-	for _, asset := range englishVoiceAssets {
-		target := filepath.Join(dir, asset.name)
-		if _, err := os.Stat(target); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return "", fmt.Errorf("check voice file %s: %w", target, err)
-		}
-		if err := downloadVoiceAsset(ctx, voiceDownloadClient, voiceAssetsURL+asset.name, target, asset.size, asset.sha256); err != nil {
-			return "", fmt.Errorf("download English voice %s: %w", asset.name, err)
-		}
-	}
-	return path, nil
 }
 
 func downloadVoiceAsset(ctx context.Context, client *http.Client, url, path string, size int64, expectedSHA256 string) error {
@@ -158,13 +102,47 @@ func downloadVoiceAsset(ctx context.Context, client *http.Client, url, path stri
 	return os.Rename(tmpPath, path)
 }
 
+func verifyVoiceAsset(path string, asset voiceAsset) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() != asset.size {
+		return fmt.Errorf("unexpected size: got %d bytes, want %d", info.Size(), asset.size)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != asset.sha256 {
+		return fmt.Errorf("SHA-256 mismatch: got %s", got)
+	}
+	return nil
+}
+
 // speakNeeds reports what is missing to speak in lang, or "".
 func speakNeeds(lang string) string {
+	if lang == "en" {
+		python := strings.TrimSpace(os.Getenv("PYTHON"))
+		if python == "" {
+			python = "python3"
+		}
+		if _, err := exec.LookPath(python); err != nil {
+			return "Needs Python 3.10–3.13"
+		}
+		if m := missing("aplay"); m != "" {
+			return "Needs " + m
+		}
+		return ""
+	}
 	if m := missing("piper", "aplay"); m != "" {
 		return "Needs " + m
-	}
-	if lang == "en" && os.Getenv("PIPER_EN_VOICE") == "" {
-		return ""
 	}
 	path := voicePath(lang)
 	if _, err := os.Stat(path); err != nil {
@@ -175,6 +153,7 @@ func speakNeeds(lang string) string {
 
 type speaker struct {
 	lang  string
+	voice string
 	lines []string
 	pcm   [][]byte
 }
@@ -183,12 +162,32 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
-	play := exec.CommandContext(ctx, "aplay", "-q", "-r", "22050", "-f", "S16_LE", "-c", "1")
+	bytesPerSec := piperBytesPerSec
+	sampleRate := 22050
+	if s.lang == "en" {
+		bytesPerSec = 24000 * 2
+		sampleRate = 24000
+	}
+	var kokoro *kokoroStream
+	var err error
+	if s.lang == "en" && len(s.pcm) < len(s.lines) {
+		kokoro, err = startKokoroStream(ctx, s.voice)
+		if err != nil {
+			return 0, err
+		}
+	}
+	play := exec.CommandContext(ctx, "aplay", "-q", "-r", strconv.Itoa(sampleRate), "-f", "S16_LE", "-c", "1")
 	in, err := play.StdinPipe()
 	if err != nil {
+		if kokoro != nil {
+			return 0, errors.Join(err, kokoro.close())
+		}
 		return 0, err
 	}
 	if err := play.Start(); err != nil {
+		if kokoro != nil {
+			return 0, errors.Join(err, kokoro.close())
+		}
 		return 0, err
 	}
 
@@ -197,10 +196,17 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	var synthErr error
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		defer close(audio)
+		defer func() {
+			if kokoro != nil {
+				if err := kokoro.close(); err != nil {
+					synthErr = errors.Join(synthErr, err)
+				}
+			}
+			close(audio)
+		}()
 		for i := range s.lines {
 			if i >= len(s.pcm) {
-				pcm, err := synth(ctx, s.lines[i], s.lang)
+				pcm, err := synth(ctx, s.lines[i], s.lang, kokoro)
 				if err != nil {
 					synthErr = err
 					return
@@ -241,42 +247,39 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 	if start.IsZero() {
 		return 0, err
 	}
-	heard := min(written, int(time.Since(start).Seconds()*bytesPerSec))
+	heard := min(written, int(time.Since(start).Seconds()*float64(bytesPerSec)))
 	return max(heard-bytesPerSec/2, 0) &^ 1, err
 }
 
-func synth(ctx context.Context, line, lang string) ([]byte, error) {
+func synth(ctx context.Context, line, lang string, kokoro *kokoroStream) ([]byte, error) {
 	text, heading := strings.CutPrefix(line, "## ")
 	text = normalizeSpeechText(text, lang)
-	model, err := ensureVoice(ctx, lang)
-	if err != nil {
-		return nil, err
+	var pcm []byte
+	var err error
+	if lang == "en" {
+		if kokoro == nil {
+			return nil, fmt.Errorf("Kokoro runtime is not started")
+		}
+		pcm, err = kokoro.synthesize(text)
+	} else {
+		model := voicePath(lang)
+		if _, err := os.Stat(model); err != nil {
+			return nil, fmt.Errorf("voice model %s: %w", model, err)
+		}
+		cmd := exec.CommandContext(ctx, "piper", "-m", model, "--output-raw", "--sentence-silence", "0.4")
+		cmd.Stdin = strings.NewReader(text + "\n")
+		cmd.Stderr = os.Stderr
+		pcm, err = cmd.Output()
 	}
-	args := []string{"-m", model, "--output-raw", "--sentence-silence", "0.4"}
-	args = append(args, piperSpeakerArgs(lang)...)
-	cmd := exec.CommandContext(ctx, "piper", args...)
-	cmd.Stdin = strings.NewReader(text + "\n")
-	cmd.Stderr = os.Stderr
-	pcm, err := cmd.Output()
 	if heading {
+		bytesPerSec := piperBytesPerSec
+		if lang == "en" {
+			bytesPerSec = 24000 * 2
+		}
 		pause := make([]byte, bytesPerSec*3/5) // 0.6s
 		pcm = append(append(pause, pcm...), pause...)
 	}
 	return pcm, err
-}
-
-func piperSpeakerArgs(lang string) []string {
-	if lang != "en" {
-		return nil
-	}
-	speaker := strings.TrimSpace(os.Getenv("PIPER_EN_SPEAKER"))
-	if speaker == "" && os.Getenv("PIPER_EN_VOICE") == "" {
-		speaker = "0"
-	}
-	if speaker == "" {
-		return nil
-	}
-	return []string{"-s", speaker}
 }
 
 func normalizeSpeechText(text, lang string) string {

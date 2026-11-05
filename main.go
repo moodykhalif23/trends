@@ -49,6 +49,13 @@ func main() {
 
 	w := a.NewWindow("Trends")
 	w.Resize(fyne.NewSize(900, 650))
+	settings, err := openSettings()
+	if err != nil {
+		log.Printf("settings FAIL err=%v", err)
+		w.SetContent(container.NewCenter(widget.NewLabel("Could not load settings: " + err.Error())))
+		w.ShowAndRun()
+		return
+	}
 
 	var items []Item
 	var home fyne.CanvasObject
@@ -70,7 +77,7 @@ func main() {
 		},
 	)
 	list.OnSelected = func(id widget.ListItemID) {
-		w.SetContent(reader(a, items[id], func() { w.SetContent(home) }))
+		w.SetContent(reader(a, items[id], settings, func() { w.SetContent(home) }))
 		list.UnselectAll()
 	}
 
@@ -103,8 +110,11 @@ func main() {
 		a.Settings().SetTheme(themeFor(dark))
 	})
 	refresh := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), load)
+	settingsButton := widget.NewButton("Settings", func() {
+		w.SetContent(settingsView(settings, func() { w.SetContent(home) }))
+	})
 
-	bar := container.NewBorder(nil, nil, topic, container.NewHBox(refresh, toggle), search)
+	bar := container.NewBorder(nil, nil, topic, container.NewHBox(settingsButton, refresh, toggle), search)
 	home = container.NewBorder(bar, status, nil, nil, list)
 	w.SetContent(home)
 
@@ -112,34 +122,48 @@ func main() {
 	w.ShowAndRun()
 }
 
-func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
+func reader(a fyne.App, it Item, settings *settingsStore, back func()) fyne.CanvasObject {
 	ctx, cancel := context.WithCancel(context.Background())
 	content := container.NewVBox(richText(heading(it.Title), para("Loading…")))
 
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
 	visit.Importance = widget.HighImportance
 	var art Article
-	en := &speaker{lang: "en"}
+	en := &speaker{lang: "en", voice: settings.snapshot().KokoroVoice}
+	speechStatus := widget.NewLabel("")
+	speechStatus.Wrapping = fyne.TextWrapWord
 	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
 		if en.lines == nil {
 			en.lines = art.Lines()
 		}
 		return en.play(c, from)
-	}))
+	}), func(err error) {
+		if err == nil {
+			speechStatus.SetText("")
+		} else {
+			speechStatus.SetText("Listen failed: " + err.Error())
+		}
+	})
 	sw := &speaker{lang: "sw"}
 	sikiliza := toggleButton(ctx, "Sikiliza", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
 		if sw.lines == nil {
-			text, err := translate(c, strings.Join(art.Lines(), "\n"), "Swahili")
+			text, err := translate(c, strings.Join(art.Lines(), "\n"), "Swahili", settings.snapshot())
 			if err != nil {
 				return 0, err
 			}
 			sw.lines = strings.Split(strings.TrimSpace(text), "\n")
 		}
 		return sw.play(c, from)
-	}))
+	}), func(err error) {
+		if err == nil {
+			speechStatus.SetText("")
+		} else {
+			speechStatus.SetText("Sikiliza failed: " + err.Error())
+		}
+	})
 	listen.Disable()
 	sikiliza.Disable()
-	actions := container.NewHBox(visit, listen, sikiliza)
+	actions := container.NewVBox(container.NewHBox(visit, listen, sikiliza), speechStatus)
 	if it.Discuss != "" {
 		actions.Add(widget.NewButton("Discuss on Hacker News", func() { open(a, it.Discuss) }))
 	}
@@ -153,7 +177,7 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 			} else {
 				art = res
 				enableIf(listen, speakNeeds("en"))
-				enableIf(sikiliza, cmp.Or(speakNeeds("sw"), translateNeeds()))
+				enableIf(sikiliza, cmp.Or(speakNeeds("sw"), translateNeeds(settings.snapshot())))
 				content.Objects = articleView(ctx, art, content.Refresh)
 			}
 			content.Refresh()
@@ -165,6 +189,51 @@ func reader(a fyne.App, it Item, back func()) fyne.CanvasObject {
 		back()
 	}))
 	return container.NewBorder(top, container.NewPadded(actions), nil, nil, container.NewVScroll(container.NewPadded(content)))
+}
+
+func settingsView(settings *settingsStore, back func()) fyne.CanvasObject {
+	current := settings.snapshot()
+	key := widget.NewPasswordEntry()
+	key.SetPlaceHolder("Paste an OpenAI-compatible API key")
+	key.SetText(current.OpenAIAPIKey)
+	baseURL := widget.NewEntry()
+	baseURL.SetText(current.OpenAIBaseURL)
+	baseURL.SetPlaceHolder(defaultOpenAIBaseURL)
+	model := widget.NewEntry()
+	model.SetText(current.OpenAIModel)
+	model.SetPlaceHolder("Provider model name")
+	voice := widget.NewSelect(kokoroVoices, nil)
+	voice.SetSelected(current.KokoroVoice)
+	status := widget.NewLabel("")
+
+	save := widget.NewButton("Save settings", func() {
+		err := settings.save(userSettings{
+			OpenAIAPIKey:  key.Text,
+			OpenAIBaseURL: baseURL.Text,
+			OpenAIModel:   model.Text,
+			KokoroVoice:   voice.Selected,
+		})
+		if err != nil {
+			status.SetText("Could not save settings: " + err.Error())
+			return
+		}
+		status.SetText("Settings saved locally.")
+	})
+	save.Importance = widget.HighImportance
+
+	form := widget.NewForm(
+		widget.NewFormItem("API key", key),
+		widget.NewFormItem("API base URL", baseURL),
+		widget.NewFormItem("Model", model),
+		widget.NewFormItem("English voice", voice),
+	)
+	description := widget.NewLabel("English uses Kokoro. The default is af_heart (American female). First use downloads about 142 MB of model files and installs the Kokoro runtime; Python 3.10–3.13 and an internet connection are required.")
+	description.Wrapping = fyne.TextWrapWord
+	privacy := widget.NewLabel("The API key is stored locally in your user settings file with restricted permissions. Leave the key blank to remove it.")
+	privacy.Wrapping = fyne.TextWrapWord
+	top := container.NewHBox(widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), back))
+	body := container.NewVBox(description, form, privacy, save, status)
+	return container.NewBorder(top, nil, nil, nil, container.NewVScroll(container.NewPadded(body)))
 }
 
 func articleView(ctx context.Context, art Article, refresh func()) []fyne.CanvasObject {
@@ -283,7 +352,7 @@ func enableIf(b *widget.Button, reason string) {
 }
 
 // toggleButton runs `run` in the background on click and shows the busy label until it returns.
-func toggleButton(ctx context.Context, label string, icon fyne.Resource, busy string, busyIcon fyne.Resource, run func(context.Context) error) *widget.Button {
+func toggleButton(ctx context.Context, label string, icon fyne.Resource, busy string, busyIcon fyne.Resource, run func(context.Context) error, onResult func(error)) *widget.Button {
 	var btn *widget.Button
 	var stop context.CancelFunc
 	btn = widget.NewButtonWithIcon(label, icon, func() {
@@ -296,14 +365,21 @@ func toggleButton(ctx context.Context, label string, icon fyne.Resource, busy st
 		btn.SetText(busy)
 		btn.SetIcon(busyIcon)
 		go func() {
-			if err := run(cctx); err != nil && cctx.Err() == nil {
+			err := run(cctx)
+			if err != nil && cctx.Err() == nil {
 				log.Printf("%s FAIL err=%v", label, err)
 			}
+			cancelled := cctx.Err() != nil
 			cancel()
 			fyne.Do(func() {
 				stop = nil
 				btn.SetText(label)
 				btn.SetIcon(icon)
+				if cancelled {
+					onResult(nil)
+				} else {
+					onResult(err)
+				}
 			})
 		}()
 	})

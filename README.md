@@ -8,12 +8,15 @@ A desktop news reader written in Go. Pulls stories from Hacker News and major RS
 - Article preview with images and subheadings, extracted from the publisher's page
 - Inline video playback, including YouTube embeds
 - Listen: text-to-speech of the article
-- Sikiliza: the article translated to Swahili by an LLM(use your any you prefer bby adding OpenAI-compatible API key in`.env`  )
+- Sikiliza: translate an article to Swahili using an OpenAI-compatible API
+- Settings page for the translation API key, endpoint, model, and English voice
 
 ## Requirements
 
 - Go 1.26+
 - PipeWire or PulseAudio
+- `aplay`
+- Python 3.10–3.13 for English speech (Kokoro)
 
 Optional. Buttons stay disabled until the tool they need is installed.
 
@@ -21,18 +24,24 @@ Optional. Buttons stay disabled until the tool they need is installed.
 | -------- | ------------------------------------------------------ |
 | Video    | `ffmpeg`, `ffprobe`                                |
 | YouTube  | `yt-dlp` (recent; Deno recommended)                  |
-| Listen   | `piper`, `aplay`                                   |
+| Listen   | `aplay`, Python 3.10–3.13                            |
+| Sikiliza | `piper`, `aplay`, a Swahili Piper voice, API settings |
 
-Voices go in `~/.local/share/piper/`:
+English speech uses Kokoro with `af_heart` (American female) by default. Choose another supported Kokoro voice in Settings. On first use, Trends creates an isolated Python environment and downloads the Kokoro runtime plus approximately 142 MB of model files. This requires Python 3.10–3.13 and an internet connection.
+
+Swahili speech uses Piper. Place the voice model and its JSON config in `~/.local/share/piper/`:
 
 ```
 sw_CD-lanfrica-medium.onnx (+ .onnx.json)
 ```
 
-Download from https://huggingface.co/rhasspy/piper-voices.
-The first time you use Listen, Trends downloads the 137 MB English LibriTTS high-quality model and its config to `~/.local/share/piper/`. It verifies each file before installing it and reuses them on later runs. This requires an internet connection once. See the [LibriTTS high model card](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/libritts/high) and [Piper voice samples](https://rhasspy.github.io/piper-samples/#en_US-libritts-high).
-LibriTTS includes 904 speakers; Trends uses speaker ID `0` by default. Set `PIPER_EN_SPEAKER` in `.env` to choose another speaker ID.
-Set `PIPER_EN_VOICE` in `.env` to use an already-installed English Piper model instead.
+Download Swahili voices from https://huggingface.co/rhasspy/piper-voices.
+
+## Settings
+
+Open **Settings** in the app to enter an OpenAI-compatible API key, base URL, model, and Kokoro voice. Settings are saved in the operating system's per-user configuration directory, separate from the application executable; the key is stored locally in a user-only settings file and is not encrypted by the app.
+
+Existing `.env` values for `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `KOKORO_VOICE` seed the settings only until a settings file is saved. After that, the saved settings take precedence.
 
 ## Run
 

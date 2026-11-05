@@ -2,40 +2,42 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"strings"
 )
 
-func translateNeeds() string {
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		return "Needs OPENAI_API_KEY"
+func translateNeeds(settings userSettings) string {
+	if strings.TrimSpace(settings.OpenAIAPIKey) == "" {
+		return "Needs API key (Settings)"
 	}
-	if os.Getenv("OPENAI_MODEL") == "" {
-		return "Needs OPENAI_MODEL"
+	if strings.TrimSpace(settings.OpenAIModel) == "" {
+		return "Needs model (Settings)"
 	}
 	return ""
 }
 
-// translate calls an OpenAI-compatible chat endpoint (OpenRouter, Groq, ...) set up in .env.
-func translate(ctx context.Context, text, language string) (string, error) {
+// translate calls an OpenAI-compatible chat endpoint configured in Settings.
+func translate(ctx context.Context, text, language string, settings userSettings) (string, error) {
 	body, _ := json.Marshal(map[string]any{
-		"model": os.Getenv("OPENAI_MODEL"),
+		"model": settings.OpenAIModel,
 		"messages": []map[string]string{
 			{"role": "system", "content": "Translate the user's text into " + language + ". Keep one paragraph per line and keep any leading '## ' markers. Reply with the translation only."},
 			{"role": "user", "content": text},
 		},
 	})
-	base := cmp.Or(os.Getenv("OPENAI_BASE_URL"), "https://openrouter.ai/api/v1")
+	base := strings.TrimRight(strings.TrimSpace(settings.OpenAIBaseURL), "/")
+	if base == "" {
+		base = defaultOpenAIBaseURL
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
+	req.Header.Set("Authorization", "Bearer "+settings.OpenAIAPIKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
