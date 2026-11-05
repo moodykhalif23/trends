@@ -30,7 +30,8 @@ sw_CD-lanfrica-medium.onnx (+ .onnx.json)
 ```
 
 Download from https://huggingface.co/rhasspy/piper-voices.
-The first time you use Listen, Trends downloads the 114 MB English Lessac high-quality voice and its config to `~/.local/share/piper/`. It verifies each file before installing it and reuses them on later runs. This requires an internet connection once. See the [Lessac high model card](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/lessac/high) and [Piper voice samples](https://rhasspy.github.io/piper-samples/).
+The first time you use Listen, Trends downloads the 137 MB English LibriTTS high-quality model and its config to `~/.local/share/piper/`. It verifies each file before installing it and reuses them on later runs. This requires an internet connection once. See the [LibriTTS high model card](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/en/en_US/libritts/high) and [Piper voice samples](https://rhasspy.github.io/piper-samples/#en_US-libritts-high).
+LibriTTS includes 904 speakers; Trends uses speaker ID `0` by default. Set `PIPER_EN_SPEAKER` in `.env` to choose another speaker ID.
 Set `PIPER_EN_VOICE` in `.env` to use an already-installed English Piper model instead.
 
 ## Run

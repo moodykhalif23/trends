@@ -20,15 +20,31 @@ import (
 const bytesPerSec = 22050 * 2 // piper output: 22050 Hz, 16-bit mono
 
 const (
-	englishVoiceName = "en_US-lessac-high.onnx"
-	voiceAssetsURL   = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/"
-	englishVoiceSize = 113895201
+	englishVoiceName = "en_US-libritts-high.onnx"
+	voiceAssetsURL   = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/libritts/high/"
+	englishVoiceSize = 136673811
 )
 
 var billionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*bn\b`)
 var millionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*m\b`)
 var dollarAmount = regexp.MustCompile(`(?i)(US)?\$\s*(\d[\d,]*(?:\.\d+)?)\s*(billion|bn|b|million|mn|m|thousand|k|trillion|T)?\b`)
 var trillionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*T\b`)
+var monthAbbreviation = regexp.MustCompile(`(?i)\b(Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec)\b\.?`)
+
+var months = map[string][2]string{
+	"jan":  {"January", "Januari"},
+	"feb":  {"February", "Februari"},
+	"mar":  {"March", "Machi"},
+	"apr":  {"April", "Aprili"},
+	"jun":  {"June", "Juni"},
+	"jul":  {"July", "Julai"},
+	"aug":  {"August", "Agosti"},
+	"sep":  {"September", "Septemba"},
+	"sept": {"September", "Septemba"},
+	"oct":  {"October", "Oktoba"},
+	"nov":  {"November", "Novemba"},
+	"dec":  {"December", "Desemba"},
+}
 
 var voices = map[string]string{
 	"sw": filepath.Join(os.Getenv("HOME"), ".local/share/piper/sw_CD-lanfrica-medium.onnx"),
@@ -57,12 +73,12 @@ var englishVoiceAssets = []voiceAsset{
 	{
 		name:   englishVoiceName,
 		size:   englishVoiceSize,
-		sha256: "4cabf7c3a638017137f34a1516522032d4fe3f38228a843cc9b764ddcbcd9e09",
+		sha256: "9127a559e11603f10b366d1a20ac7426826081dbc521de4c2420c57728d73f0f",
 	},
 	{
 		name:   englishVoiceName + ".json",
-		size:   4883,
-		sha256: "db42b97d9859f257bc1561b8ed980e7fb2398402050a74ddd6cbec931a92412f",
+		size:   20163,
+		sha256: "2efdc6d7f954588b8180132cbd9b8001933fdd00932c92bc92fd0d2028a9eb3d",
 	},
 }
 
@@ -236,7 +252,9 @@ func synth(ctx context.Context, line, lang string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "piper", "-m", model, "--output-raw", "--sentence-silence", "0.4")
+	args := []string{"-m", model, "--output-raw", "--sentence-silence", "0.4"}
+	args = append(args, piperSpeakerArgs(lang)...)
+	cmd := exec.CommandContext(ctx, "piper", args...)
 	cmd.Stdin = strings.NewReader(text + "\n")
 	cmd.Stderr = os.Stderr
 	pcm, err := cmd.Output()
@@ -245,6 +263,20 @@ func synth(ctx context.Context, line, lang string) ([]byte, error) {
 		pcm = append(append(pause, pcm...), pause...)
 	}
 	return pcm, err
+}
+
+func piperSpeakerArgs(lang string) []string {
+	if lang != "en" {
+		return nil
+	}
+	speaker := strings.TrimSpace(os.Getenv("PIPER_EN_SPEAKER"))
+	if speaker == "" && os.Getenv("PIPER_EN_VOICE") == "" {
+		speaker = "0"
+	}
+	if speaker == "" {
+		return nil
+	}
+	return []string{"-s", speaker}
 }
 
 func normalizeSpeechText(text, lang string) string {
@@ -280,5 +312,41 @@ func normalizeSpeechText(text, lang string) string {
 	})
 	text = trillionAbbreviation.ReplaceAllString(text, "${1} "+trillion)
 	text = billionAbbreviation.ReplaceAllString(text, "${1} "+billion)
-	return millionAbbreviation.ReplaceAllString(text, "${1} "+million)
+	text = millionAbbreviation.ReplaceAllString(text, "${1} "+million)
+	return normalizeMonthAbbreviations(text, lang)
+}
+
+func normalizeMonthAbbreviations(text, lang string) string {
+	matches := monthAbbreviation.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+
+	var result strings.Builder
+	last := 0
+	for _, match := range matches {
+		abbreviation := text[match[0]:match[1]]
+		abbreviatedMonth := strings.TrimSuffix(abbreviation, ".")
+		after := strings.TrimLeft(text[match[1]:], " \t\r\n")
+		dateFollows := len(after) > 0 && after[0] >= '0' && after[0] <= '9'
+		if abbreviatedMonth == strings.ToUpper(abbreviatedMonth) && !strings.HasSuffix(abbreviation, ".") && !dateFollows {
+			result.WriteString(text[last:match[1]])
+			last = match[1]
+			continue
+		}
+
+		key := strings.ToLower(abbreviatedMonth)
+		name := months[key][0]
+		if lang == "sw" {
+			name = months[key][1]
+		}
+		result.WriteString(text[last:match[0]])
+		result.WriteString(name)
+		if strings.HasSuffix(abbreviation, ".") && !dateFollows {
+			result.WriteByte('.')
+		}
+		last = match[1]
+	}
+	result.WriteString(text[last:])
+	return result.String()
 }
