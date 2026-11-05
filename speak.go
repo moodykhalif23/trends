@@ -138,18 +138,18 @@ func synth(ctx context.Context, line, lang string) ([]byte, error) {
 }
 
 func normalizeSpeechText(text, lang string) string {
-	Trillion, billion, million := "trillion", "billion", "million"
+	trillion, billion, million := "trillion", "billion", "million"
 	thousand, dollars := "thousand", "US dollars"
 	if lang == "sw" {
-		Trillion, billion, million = "trilioni", "bilioni", "milioni"
+		trillion, billion, million = "trilioni", "bilioni", "milioni"
 		thousand, dollars = "elfu", "dola za Marekani"
 	}
 	text = dollarAmount.ReplaceAllStringFunc(text, func(amount string) string {
 		parts := dollarAmount.FindStringSubmatch(amount)
 		scale := strings.ToLower(parts[3])
 		switch scale {
-		case "T", "trillion":
-			scale = Trillion
+		case "t", "trillion":
+			scale = trillion
 		case "b", "bn", "billion":
 			scale = billion
 		case "m", "mn", "million":
@@ -168,6 +168,7 @@ func normalizeSpeechText(text, lang string) string {
 		}
 		return strings.Join(strings.Fields(parts[2]+" "+scale+" "+currency), " ")
 	})
+	text = trillionAbbreviation.ReplaceAllString(text, "${1} "+trillion)
 	text = billionAbbreviation.ReplaceAllString(text, "${1} "+billion)
 	return millionAbbreviation.ReplaceAllString(text, "${1} "+million)
 }
