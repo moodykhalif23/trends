@@ -56,10 +56,27 @@ func main() {
 		w.ShowAndRun()
 		return
 	}
+	kokoro := newKokoroRuntime()
+	defer func() {
+		if err := kokoro.close(); err != nil {
+			log.Printf("Kokoro shutdown FAIL err=%v", err)
+		}
+	}()
 
 	var items []Item
 	var home fyne.CanvasObject
 	status := widget.NewLabel("")
+	speechStatus := widget.NewLabel("Preparing speech engine…")
+	go func() {
+		err := kokoro.prepare(kokoro.ctx, settings.snapshot().KokoroVoice)
+		fyne.Do(func() {
+			if err != nil {
+				speechStatus.SetText("Speech engine unavailable: " + err.Error())
+			} else {
+				speechStatus.SetText("Speech engine ready")
+			}
+		})
+	}()
 
 	list := widget.NewList(
 		func() int { return len(items) },
@@ -77,7 +94,7 @@ func main() {
 		},
 	)
 	list.OnSelected = func(id widget.ListItemID) {
-		w.SetContent(reader(a, items[id], settings, func() { w.SetContent(home) }))
+		w.SetContent(reader(a, items[id], settings, kokoro, func() { w.SetContent(home) }))
 		list.UnselectAll()
 	}
 
@@ -111,25 +128,26 @@ func main() {
 	})
 	refresh := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), load)
 	settingsButton := widget.NewButton("Settings", func() {
-		w.SetContent(settingsView(settings, func() { w.SetContent(home) }))
+		w.SetContent(settingsView(settings, kokoro, func() { w.SetContent(home) }))
 	})
 
 	bar := container.NewBorder(nil, nil, topic, container.NewHBox(settingsButton, refresh, toggle), search)
-	home = container.NewBorder(bar, status, nil, nil, list)
+	home = container.NewBorder(bar, container.NewVBox(status, speechStatus), nil, nil, list)
 	w.SetContent(home)
 
 	topic.SetSelected(Topics[0])
 	w.ShowAndRun()
 }
 
-func reader(a fyne.App, it Item, settings *settingsStore, back func()) fyne.CanvasObject {
+func reader(a fyne.App, it Item, settings *settingsStore, kokoro *kokoroRuntime, back func()) fyne.CanvasObject {
 	ctx, cancel := context.WithCancel(context.Background())
 	content := container.NewVBox(richText(heading(it.Title), para("Loading…")))
 
 	visit := widget.NewButtonWithIcon("Read the full story on the publisher's site", theme.MailForwardIcon(), func() { open(a, it.Link) })
 	visit.Importance = widget.HighImportance
 	var art Article
-	en := &speaker{lang: "en", voice: settings.snapshot().KokoroVoice}
+	voice := settings.snapshot().KokoroVoice
+	en := &speaker{lang: "en", voice: voice, engine: kokoro}
 	speechStatus := widget.NewLabel("")
 	speechStatus.Wrapping = fyne.TextWrapWord
 	listen := toggleButton(ctx, "Listen", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
@@ -144,7 +162,7 @@ func reader(a fyne.App, it Item, settings *settingsStore, back func()) fyne.Canv
 			speechStatus.SetText("Listen failed: " + err.Error())
 		}
 	})
-	sw := &speaker{lang: "sw"}
+	sw := &speaker{lang: "sw", voice: voice, engine: kokoro}
 	sikiliza := toggleButton(ctx, "Sikiliza", theme.VolumeUpIcon(), "Pause", theme.MediaPauseIcon(), resumable(func(c context.Context, from int) (int, error) {
 		if sw.lines == nil {
 			text, err := translate(c, strings.Join(art.Lines(), "\n"), "Swahili", settings.snapshot())
@@ -163,6 +181,19 @@ func reader(a fyne.App, it Item, settings *settingsStore, back func()) fyne.Canv
 	})
 	listen.Disable()
 	sikiliza.Disable()
+	articleReady, engineReady := false, false
+	updateSpeechButtons := func() {
+		if !articleReady {
+			return
+		}
+		if !engineReady {
+			listen.SetText("Preparing voice…")
+			sikiliza.SetText("Preparing voice…")
+			return
+		}
+		enableIf(listen, speakNeeds())
+		enableIf(sikiliza, cmp.Or(speakNeeds(), translateNeeds(settings.snapshot())))
+	}
 	actions := container.NewVBox(container.NewHBox(visit, listen, sikiliza), speechStatus)
 	if it.Discuss != "" {
 		actions.Add(widget.NewButton("Discuss on Hacker News", func() { open(a, it.Discuss) }))
@@ -176,11 +207,25 @@ func reader(a fyne.App, it Item, settings *settingsStore, back func()) fyne.Canv
 				content.Objects = []fyne.CanvasObject{richText(heading(it.Title), para("Preview unavailable: "+err.Error()))}
 			} else {
 				art = res
-				enableIf(listen, speakNeeds("en"))
-				enableIf(sikiliza, cmp.Or(speakNeeds("sw"), translateNeeds(settings.snapshot())))
+				articleReady = true
+				updateSpeechButtons()
 				content.Objects = articleView(ctx, art, content.Refresh)
 			}
 			content.Refresh()
+		})
+	}()
+	go func() {
+		err := kokoro.prepare(ctx, voice)
+		fyne.Do(func() {
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				speechStatus.SetText("Speech engine setup failed: " + err.Error())
+				return
+			}
+			engineReady = true
+			updateSpeechButtons()
 		})
 	}()
 
@@ -191,7 +236,7 @@ func reader(a fyne.App, it Item, settings *settingsStore, back func()) fyne.Canv
 	return container.NewBorder(top, container.NewPadded(actions), nil, nil, container.NewVScroll(container.NewPadded(content)))
 }
 
-func settingsView(settings *settingsStore, back func()) fyne.CanvasObject {
+func settingsView(settings *settingsStore, kokoro *kokoroRuntime, back func()) fyne.CanvasObject {
 	current := settings.snapshot()
 	key := widget.NewPasswordEntry()
 	key.SetPlaceHolder("Paste an OpenAI-compatible API key")
@@ -207,17 +252,28 @@ func settingsView(settings *settingsStore, back func()) fyne.CanvasObject {
 	status := widget.NewLabel("")
 
 	save := widget.NewButton("Save settings", func() {
-		err := settings.save(userSettings{
+		value := userSettings{
 			OpenAIAPIKey:  key.Text,
 			OpenAIBaseURL: baseURL.Text,
 			OpenAIModel:   model.Text,
 			KokoroVoice:   voice.Selected,
-		})
+		}
+		err := settings.save(value)
 		if err != nil {
 			status.SetText("Could not save settings: " + err.Error())
 			return
 		}
-		status.SetText("Settings saved locally.")
+		status.SetText("Settings saved. Preparing selected voice…")
+		go func() {
+			err := kokoro.prepare(context.Background(), value.KokoroVoice)
+			fyne.Do(func() {
+				if err != nil {
+					status.SetText("Settings saved, but voice preparation failed: " + err.Error())
+					return
+				}
+				status.SetText("Settings saved. Voice is ready.")
+			})
+		}()
 	})
 	save.Importance = widget.HighImportance
 
@@ -227,7 +283,7 @@ func settingsView(settings *settingsStore, back func()) fyne.CanvasObject {
 		widget.NewFormItem("Model", model),
 		widget.NewFormItem("English voice", voice),
 	)
-	description := widget.NewLabel("English uses Kokoro. The default is af_heart (American female). First use downloads about 142 MB of model files and installs the Kokoro runtime; Python 3.10–3.13 and an internet connection are required.")
+	description := widget.NewLabel("English and Swahili speech use Kokoro. The default is af_heart (American female); Swahili text is spoken with the selected English voice. First use downloads about 142 MB of model files and installs the Kokoro runtime; Python 3.10–3.13 and an internet connection are required.")
 	description.Wrapping = fyne.TextWrapWord
 	privacy := widget.NewLabel("The API key is stored locally in your user settings file with restricted permissions. Leave the key blank to remove it.")
 	privacy.Wrapping = fyne.TextWrapWord

@@ -27,17 +27,11 @@ Optional. Buttons stay disabled until the tool they need is installed.
 | Video    | `ffmpeg`, `ffprobe`                                |
 | YouTube  | `yt-dlp` (recent; Deno recommended)                  |
 | Listen   | `aplay`, Python 3.10–3.13                            |
-| Sikiliza | `piper`, `aplay`, a Swahili Piper voice, API settings |
+| Sikiliza | `aplay`, API settings                             |
 
-English speech uses Kokoro with `af_heart` (American female) by default. Choose another supported Kokoro voice in Settings. On first use, Trends creates an isolated Python environment and downloads the Kokoro runtime plus approximately 142 MB of model files. This requires Python 3.10–3.13 and an internet connection.
+English and Swahili speech use Kokoro with `af_heart` (American female) by default; choose another supported Kokoro voice in Settings. Swahili translations are spoken by the selected English voice because Kokoro does not include a Swahili voice. Trends applies pronunciation hints to common Kenyan names, including Kisii. On first use, Trends creates an isolated Python environment and downloads the Kokoro runtime plus approximately 142 MB of model files. This requires Python 3.10–3.13 and an internet connection.
 
-Swahili speech uses Piper. Place the voice model and its JSON config in `~/.local/share/piper/`:
-
-```
-sw_CD-lanfrica-medium.onnx (+ .onnx.json)
-```
-
-Download Swahili voices from https://huggingface.co/rhasspy/piper-voices.
+The app prepares and warms the speech engine in the background at startup, then keeps it running while the app is open. Pausing and resuming does not reload the model.
 
 ## Settings
 

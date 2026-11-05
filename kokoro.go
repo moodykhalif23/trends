@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -64,6 +67,161 @@ var kokoroReady bool
 var kokoroPythonPath string
 var kokoroModelPath string
 var kokoroVoicesPath string
+var voiceDownloadClient = &http.Client{Timeout: 10 * time.Minute}
+
+type voiceAsset struct {
+	name   string
+	size   int64
+	sha256 string
+}
+
+func downloadVoiceAsset(ctx context.Context, client *http.Client, url, path string, size int64, expectedSHA256 string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", url, resp.Status)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".download-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(resp.Body, size+1))
+	if err != nil {
+		tmp.Close()
+		return err
+	}
+	if n != size {
+		tmp.Close()
+		return fmt.Errorf("unexpected size: got %d bytes, want %d", n, size)
+	}
+	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != expectedSHA256 {
+		tmp.Close()
+		return fmt.Errorf("SHA-256 mismatch: got %s", got)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func verifyVoiceAsset(path string, asset voiceAsset) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() != asset.size {
+		return fmt.Errorf("unexpected size: got %d bytes, want %d", info.Size(), asset.size)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != asset.sha256 {
+		return fmt.Errorf("SHA-256 mismatch: got %s", got)
+	}
+	return nil
+}
+
+type kokoroRuntime struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	stream *kokoroStream
+	voice  string
+}
+
+func newKokoroRuntime() *kokoroRuntime {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &kokoroRuntime{ctx: ctx, cancel: cancel}
+}
+
+func (r *kokoroRuntime) prepare(ctx context.Context, voice string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	alreadyPrepared := r.stream != nil && r.voice == voice
+	if err := r.ensureStreamLocked(voice); err != nil {
+		return err
+	}
+	if alreadyPrepared {
+		return nil
+	}
+	if _, err := r.stream.synthesize("The latest news."); err != nil {
+		return fmt.Errorf("warm up Kokoro voice: %w", err)
+	}
+	return nil
+}
+
+func (r *kokoroRuntime) ensureStreamLocked(voice string) error {
+	if r.stream != nil && r.voice == voice {
+		return nil
+	}
+	if r.stream != nil {
+		if err := r.stream.close(); err != nil {
+			return err
+		}
+		r.stream = nil
+	}
+	stream, err := startKokoroStream(r.ctx, voice)
+	if err != nil {
+		return err
+	}
+	r.stream = stream
+	r.voice = voice
+	return nil
+}
+
+func (r *kokoroRuntime) synthesize(ctx context.Context, voice, text string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.ensureStreamLocked(voice); err != nil {
+		return nil, err
+	}
+	return r.stream.synthesize(text)
+}
+
+func (r *kokoroRuntime) close() error {
+	r.cancel()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stream == nil {
+		return nil
+	}
+	err := r.stream.close()
+	r.stream = nil
+	return err
+}
 
 func isKokoroVoice(voice string) bool {
 	for _, known := range kokoroVoices {
@@ -159,6 +317,7 @@ type kokoroStream struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	mu     sync.Mutex
 }
 
 func startKokoroStream(ctx context.Context, voice string) (*kokoroStream, error) {
@@ -189,6 +348,8 @@ func startKokoroStream(ctx context.Context, voice string) (*kokoroStream, error)
 }
 
 func (k *kokoroStream) synthesize(text string) ([]byte, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	request, err := json.Marshal(text)
 	if err != nil {
 		return nil, fmt.Errorf("encode Kokoro request: %w", err)
@@ -213,6 +374,8 @@ func (k *kokoroStream) synthesize(text string) ([]byte, error) {
 }
 
 func (k *kokoroStream) close() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	var closeErr error
 	if err := k.stdin.Close(); err != nil {
 		closeErr = fmt.Errorf("close Kokoro input: %w", err)
