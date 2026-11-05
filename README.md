@@ -4,7 +4,7 @@ A desktop news reader written in Go. Pulls stories from Hacker News and major RS
 
 ## Features
 
-- Topics: Tech, Finance, Science, Medicine, Education, World, plus free-text search
+- Topics: Tech, Finance, Science, Medicine, Education, Kenya, Africa, World, plus free-text search
 - Article preview with images and subheadings, extracted from the publisher's page
 - Inline video playback, including YouTube embeds
 - Listen: text-to-speech of the article

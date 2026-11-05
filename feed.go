@@ -26,7 +26,7 @@ type Item struct {
 
 type Feed struct{ Name, URL string }
 
-var Topics = []string{"Tech", "Finance", "Science", "Medicine", "Education", "World"}
+var Topics = []string{"Tech", "Finance", "Science", "Medicine", "Education", "Kenya", "Africa", "World"}
 
 var feeds = map[string][]Feed{
 	"Tech": {
@@ -55,11 +55,22 @@ var feeds = map[string][]Feed{
 		{"NPR", "https://feeds.npr.org/1013/rss.xml"},
 		{"EdSurge", "https://www.edsurge.com/articles_rss"},
 	},
+	"Kenya": {
+		{"The Standard", "https://www.standardmedia.co.ke/rss/kenya.php"},
+		{"Capital FM Kenya", "https://www.capitalfm.co.ke/news/feed/"},
+		{"KBC", "https://www.kbc.co.ke/feed/"},
+	},
+	"Africa": {
+		{"BBC News Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml"},
+		{"Africanews", "https://www.africanews.com/feed/rss"},
+	},
 	"World": {
 		{"BBC News", "https://feeds.bbci.co.uk/news/world/rss.xml"},
 		{"The Guardian", "https://www.theguardian.com/world/rss"},
 		{"NPR", "https://feeds.npr.org/1004/rss.xml"},
 		{"Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"},
+		{"BBC News Africa", "https://feeds.bbci.co.uk/news/world/africa/rss.xml"},
+		{"Africanews", "https://www.africanews.com/feed/rss"},
 	},
 }
 
@@ -78,14 +89,18 @@ var client = &http.Client{Timeout: 15 * time.Second}
 func Fetch(topic, search string) ([]Item, error) {
 	search = strings.TrimSpace(search)
 	sources, hnQuery := feeds[topic], hnQueries[topic]
+	includeHN := topic != "Kenya" && topic != "Africa"
 	if search != "" {
 		sources, hnQuery = allFeeds(), search
+		includeHN = true
 	}
 
 	lists := make([][]Item, len(sources)+1)
 	errs := make([]error, len(lists))
 	var wg sync.WaitGroup
-	wg.Go(func() { lists[0], errs[0] = hackerNews(hnQuery) })
+	if includeHN {
+		wg.Go(func() { lists[0], errs[0] = hackerNews(hnQuery) })
+	}
 	for i, f := range sources {
 		wg.Go(func() { lists[i+1], errs[i+1] = rss(f) })
 	}
