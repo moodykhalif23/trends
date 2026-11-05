@@ -6,12 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
 const bytesPerSec = 22050 * 2 // piper output: 22050 Hz, 16-bit mono
+
+var billionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*bn\b`)
+var millionAbbreviation = regexp.MustCompile(`(?i)\b(\d[\d,]*(?:\.\d+)?)\s*m\b`)
 
 var voices = map[string]string{
 	"en": filepath.Join(os.Getenv("HOME"), ".local/share/piper/en_US-lessac-medium.onnx"),
@@ -101,6 +105,7 @@ func (s *speaker) play(ctx context.Context, from int) (int, error) {
 
 func synth(ctx context.Context, line, lang string) ([]byte, error) {
 	text, heading := strings.CutPrefix(line, "## ")
+	text = normalizeSpeechText(text, lang)
 	cmd := exec.CommandContext(ctx, "piper", "-m", voices[lang], "--output-raw", "--sentence-silence", "0.4")
 	cmd.Stdin = strings.NewReader(text + "\n")
 	cmd.Stderr = os.Stderr
@@ -110,4 +115,13 @@ func synth(ctx context.Context, line, lang string) ([]byte, error) {
 		pcm = append(append(pause, pcm...), pause...)
 	}
 	return pcm, err
+}
+
+func normalizeSpeechText(text, lang string) string {
+	billion, million := "billion", "million"
+	if lang == "sw" {
+		billion, million = "bilioni", "milioni"
+	}
+	text = billionAbbreviation.ReplaceAllString(text, "${1} "+billion)
+	return millionAbbreviation.ReplaceAllString(text, "${1} "+million)
 }
